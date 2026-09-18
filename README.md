@@ -11,69 +11,95 @@ whether station data are bias-corrected, and which stations are in the network.
 
 | File | Contents |
 | --- | --- |
-| `US-Heatwave-Trends-Analysis-Code.ipynb` | Every figure in the paper. Shared code first, then one section per figure. Saved with its outputs, so the figures are visible without running anything. |
+| `figures/` | One script per figure — `figure1.py` … `figure6.py` — plus `common.py` (paths and shared machinery) and `prepare_data.py` (builds the inputs the archive does not carry). See `figures/README.md`. |
+| `US-Heatwave-Trends-Analysis-Code.ipynb` | The original notebook the scripts were split out of. Every figure, shared code first, then one section per figure. Saved with its outputs, so the figures are visible without running anything. |
 | `requirements.txt` | Python packages. |
-| `.gitignore` | Keeps the data, the caches and the generated figure files out of the repository. |
+| `.gitignore` | Keeps data, caches and generated figures out of the repository. |
 
-### How the notebook is laid out
+Notebook or scripts, either produces the figures; the analysis code is identical, line
+for line. Use the notebook to read the analysis in order, the scripts to rebuild one
+figure. The scripts are what currently runs against the lab archive — the notebook still
+carries the original author's paths.
 
-Sections 1-4 build what the figures share:
+Figure S1 of the paper is not in the notebook and has no script here.
 
-| Section | Contents |
-| --- | --- |
-| 1. Setup | Imports, data locations, caches, and the settings the figures share. |
-| 2. Geometry | One CONUS polygon: fractional area weights for the gridded averages, a point-in-polygon test for the station figures. |
-| 3. Anomaly-first pipeline | Station anomalies, IDW gridding, cell anomalies, area averaging, day-weighted seasonal means. |
-| 4. Gridded products | NOAAGlobalTemp and CRUTEM5, read once and cached. |
+## Running the scripts
 
-Sections 5-10 are the figures:
+```bash
+pip install -r requirements.txt
+```
 
-| Section | Figure | What it shows |
+Once, to build the derived inputs:
+
+```bash
+python figures/prepare_data.py
+```
+
+Then any figure, in any order:
+
+```bash
+python figures/figure3.py
+```
+
+Each script runs top to bottom — shared checks, its own settings and helpers, build, its
+own `CHECK`, plot — and prints the paths it wrote. Everything lands in
+`PAPER_FIGURES_FINAL/`. The first run of a figure fills `_cache_*/` and is slow, minutes
+per dataset; later runs read the cache in seconds.
+
+Cartopy and geopandas are the awkward dependencies. `conda install -c conda-forge
+cartopy geopandas` is usually easier than pip. `pyarrow` must be a working install —
+a conda `libarrow` built against a `libutf8proc` that is no longer present will import
+but segfault; `pip install --force-reinstall --no-deps pyarrow` gets a self-contained
+wheel.
+
+### Running the notebook instead
+
+```bash
+jupyter lab US-Heatwave-Trends-Analysis-Code.ipynb
+```
+
+Run sections 1-4 once, then the figure you want; within a figure, run its cells in order.
+Run section 7 (Figure 3) before section 10 (Figure 6): it builds the daily station cube
+that the heat-wave figure reads. Update the paths in the Setup cell first — they point at
+the original author's drive.
+
+## Data
+
+Nothing in this repository. The raw archives run to tens of GB and the caches to several
+more, so all of it is regenerated rather than committed.
+
+The scripts resolve every input against `/Volumes/adessler_lab` by default, with a
+fallback to the layout the notebook used. Override with:
+
+| Variable | What it sets | Default |
 | --- | --- | --- |
-| 5 | Figure 1 | CONUS JJA anomalies, TMAX / TMIN / TAVG, eight datasets, 1900-2024 |
-| 6 | Figure 2 | Seasonal bars, DJF-SON by element, Dust Bowl vs. modern |
-| 7 | Figure 3 | CONUS daily TMAX record frequency, May-September |
-| 8 | Figure 4 | Berkeley Earth exceedance maps, p95 from the full record |
-| 9 | Figure 5 | Northern mid-latitude band, 24-50N, JJA |
-| 10 | Figure 6 | Heat-wave days, CONUS vs. the global strip, Christy (2026) method |
+| `HEATWAVE_ROOT` | raw archive | `/Volumes/adessler_lab` |
+| `HEATWAVE_WORK` | caches, derived inputs, figure output | the repository root |
+| `HEATWAVE_STAGE=0` | read the archive in place instead of staging it locally | unset |
+| `HEATWAVE_SHOW=1` | draw interactively instead of headless | unset (`Agg`) |
 
-Each figure section is split into *settings and helpers*, *build*, *check* and *plot*, so
-the numbers can be read before anything is drawn.
+Every script starts by printing which inputs it can see, so a missing drive or an unbuilt
+input is reported before anything is computed.
 
-### The CHECK cells
+### What the archive provides, and what is rebuilt
 
-Every section ends with a `CHECK` cell that tests what was just defined, so a failure is
-located before any figure is drawn. Most run on synthetic numbers and need no data at
-all. They confirm, among other things, that a season is labelled by the year of its last
-month; that a field equal to its own climatology gives exactly zero; that a station
-sitting on a grid point is reproduced exactly by the interpolation; that a station
-without enough baseline years is dropped; that ties in the record count are split rather
-than awarded to the earliest year; that each record series integrates to exactly 153
-May-September days; and that a five-day hot spell is not counted as a heat wave while a
-six-day one is.
+Provided directly: Berkeley Earth (`Processed/` and `RAW/`), ERA5 dailies,
+NOAAGlobalTemp, CRUTEM5, nCLIMDIV, GHCN-Daily station metadata, and the USHCN v2.5
+monthly raw / FLs.52j pair with its monthly offsets.
 
-## What is NOT here
+Three inputs the figures need are not on the archive in that form, and
+`prepare_data.py` builds them into `$HEATWAVE_WORK/_data` (~870 MB, one-time):
 
-No data and no generated figure files. The raw archives run to several GB and the caches
-to more, so they are excluded by `.gitignore`. The notebook expects them at
+1. **GHCN-Daily 24-50N band archive** — rebuilt from the raw by-year CSVs. The archive's
+   ready-made daily cube is CONUS-only, and Figures 5 and 6 need stations worldwide.
+2. **USHCN daily raw / bias-corrected pair** — *a reconstruction.* Only monthly USHCN is
+   on the archive, so the daily pair is rebuilt by adding each station-month's v2.5
+   offset to that station's daily GHCN-Daily values.
+3. **2-degree global gridded GHCN-Daily TMAX** — Figure 6's bottom-row GHCN panel.
 
-```
-/Volumes/Expansion/homogenized_dataset_analysis/    # raw archives (external drive)
-    GHCND/Global/ghcn_global_YYYY.parquet           # GHCN-Daily station archive
-    GHCND/ghcnd-inventory.txt
-    Berkeley_Earth/Processed/                       # Berkeley Earth daily fields
-    Berkeley_Earth/RAW/
-    ERA5/era5_2t_YYYYMM_daily.nc
-    nclimdiv/                                       # NOAA statewide/divisional files
-    noaaglobaltemp/, crutem5/
-    ushcn_daily_homog/output/                       # USHCN raw and adjusted daily pairs
-<working directory>/_cache_*/                       # caches the notebook builds itself
-```
-
-Change the paths in the Setup cell to point at your own copy; the CHECK cell right below
-it reports which of them this machine can see. Caches are rebuilt automatically on a
-first run; that run is slow (minutes per dataset), later runs take seconds. Figures are
-written to `PAPER_FIGURES_FINAL/`.
+`figures/README.md` documents each of these, the local staging that works around
+unreliable HDF5 reads over the network share, and `prepare_data.py prune` for reclaiming
+the staged copies afterwards.
 
 ### Data sources
 
@@ -85,6 +111,36 @@ written to `PAPER_FIGURES_FINAL/`.
 | Berkeley Earth | Berkeley Earth daily products |
 | NOAAGlobalTemp v6, CRUTEM5 | NOAA NCEI / Met Office Hadley Centre and CRU |
 | ERA5 | ECMWF, via the Copernicus Climate Data Store |
+
+## The figures
+
+| Script | Notebook section | Figure | What it shows |
+| --- | --- | --- | --- |
+| `figure1.py` | 5 | Figure 1 | CONUS JJA anomalies, TMAX / TMIN / TAVG, eight datasets, 1900-2024 |
+| `figure2.py` | 6 | Figure 2 | Seasonal bars, DJF-SON by element, Dust Bowl vs. modern |
+| `figure3.py` | 7 | Figure 3 | CONUS daily TMAX record frequency, May-September |
+| `figure4.py` | 8 | Figure 4 | Berkeley Earth exceedance maps, p95 from the full record |
+| `figure5.py` | 9 | Figure 5 | Northern mid-latitude band, 24-50N, JJA |
+| `figure6.py` | 10 | Figure 6 | Heat-wave days, CONUS vs. the global strip, Christy (2026) method |
+
+Notebook sections 1-4 — setup, geometry, the anomaly-first pipeline, the gridded
+loaders — are `figures/common.py`.
+
+### The CHECK blocks
+
+Every section ends with a `CHECK` that tests what was just defined, so a failure is
+located before any figure is drawn. Most run on synthetic numbers and need no data at
+all. They confirm, among other things, that a season is labelled by the year of its last
+month; that a field equal to its own climatology gives exactly zero; that a station
+sitting on a grid point is reproduced exactly by the interpolation; that a station
+without enough baseline years is dropped; that ties in the record count are split rather
+than awarded to the earliest year; that each record series integrates to exactly 153
+May-September days; and that a five-day hot spell is not counted as a heat wave while a
+six-day one is.
+
+Figure 1's check is also an end-to-end validation: it prints the homogenization signal
+(USHCN-BC minus USHCN-Daily) against the published run, and the current build reproduces
+it to 0.01 degC.
 
 ## Methods, in one paragraph each
 
@@ -110,16 +166,21 @@ day-of-season 90th percentile computed over the full record in a +/-3 day window
 station or cell is dropped from a year's average if fewer than 70% of that year's
 May-September days have a valid TMAX.
 
-## Running it
+## Caveats on the current reproduction
 
-```bash
-pip install -r requirements.txt
-jupyter lab US-Heatwave-Trends-Analysis-Code.ipynb
-```
+Three places where what the scripts produce is not bit-for-bit what the paper shows, all
+of them consequences of what is and is not on the archive:
 
-Run sections 1-4 once, then the figure you want; within a figure, run its cells in order.
-Run section 7 (Figure 3) before section 10 (Figure 6): it builds the daily station cube
-that the heat-wave figure reads.
-
-Cartopy and geopandas are the awkward dependencies. `conda install -c conda-forge
-cartopy geopandas` is usually easier than pip.
+- **The USHCN daily pair is reconstructed**, not copied — see above. The paper's own
+  `ushcn_daily_homog` was built by the original author and is not on the archive. The
+  method is reproduced and the matched-pair invariant the figures assert holds, and
+  Figure 1's homogenization signal matches the published value, but the USHCN-Daily and
+  USHCN-BC lines are a rebuild.
+- **nCLIMDIV is a later release.** The archive carries the `20260806` processing date;
+  the paper used `20260406`, so nCLIMDIV numbers can differ slightly. The scripts resolve
+  the filename rather than pinning a date.
+- **Figure 4's embedded image in the .docx is stale.** Its colourbar is labelled
+  "baseline 1951-1980" and its scale runs to ~47%, while its own title and the paper's
+  caption both say the threshold comes from the full 1900-2024 record. The script follows
+  the caption and the notebook, which puts the scale at ~25%. The spatial patterns are
+  the same either way.

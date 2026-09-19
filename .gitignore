@@ -52,10 +52,9 @@ PAPER_FIGURES_FINAL/
 *.pptx
 *.xlsx
 
-# ── notebook noise ──────────────────────────────────────────────────────────
-*.BACKUP-*.ipynb
+# ── notebooks ────────────────────────────────────────────────────────────────
+*.ipynb
 .ipynb_checkpoints/
-Untitled*.ipynb
 
 # ── python ──────────────────────────────────────────────────────────────────
 __pycache__/

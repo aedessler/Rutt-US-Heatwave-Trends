@@ -33,9 +33,51 @@ USHCN_LEGS = ("raw", "adj")
 GHCND_CONUS_SOURCE = "stations"   # "stations" (fixed) | "christy_grid" (old)
 COMPARE_BOTH_GHCND = False
 BLANK_BE_PARTIAL   = True
-MIN_THRESH_N       = 30
-SMOOTH_W           = 5
 USREG_MODE         = "polygon"
+
+# ══ (I) CHRISTY (2026) COMPLIANCE ══════════════════════════════════════════
+# Four places where this script used to differ from the reference implementation,
+# /Users/adessler/Desktop/Christy 2026 analysis/us_dly_waves.py (a Python port of
+# J.R. Christy's us_dly_waves.f, UAH/NSSTC). Each is a switch, so the old
+# behaviour is one edit away and the CHECK block can price the difference.
+#
+# (I1) the percentile estimator. Christy sorts the pooled window and takes
+#      sorted[int(n*p/100)] -- a nearest-rank rule, so the threshold is an
+#      OBSERVED value. numpy's default interpolates between two of them.
+PCTILE_METHOD = "nearest_rank"    # "nearest_rank" (Christy) | "linear" (v F)
+#
+# (I2) the exceedance test. Coupled to (I1): against an interpolated threshold
+#      no day lands exactly on it and > vs >= is academic, but a nearest-rank
+#      threshold IS a data value and GHCN-Daily is quantised to 0.1 degC, so the
+#      tied days are a real population -- a few tenths of a percent of all days,
+#      about half a day per season against totals in the 5-15 day range.
+EXCEED_INCLUSIVE = True           # tx >= thr (Christy) | tx > thr (v F)
+#
+# (I3) how many values a day-of-season threshold needs. Christy: icnt > 200.
+#      On gridded data this never binds (Berkeley offers ~875 per cell-day);
+#      on stations it IS the record-length filter, ~29 near-complete seasons.
+MIN_THRESH_N = 201                # 30 was v F
+#
+# (I4) the spatial reduction, and the one that matters. Christy counts wave days
+#      at each station, IDW-interpolates THE COUNTS onto a grid, and then takes a
+#      cos(lat) area average of the accepted cells. v F averaged over stations
+#      directly, which weights by where the observers are rather than by land.
+STATION_REDUCTION = "idw_grid"    # "idw_grid" (Christy) | "station_mean" (v F)
+
+# The IDW itself (us_dly_waves.py:358-425). The radius is a property of the
+# SEARCH, not of the cell, so Christy's 115 km carries over unchanged to the 1
+# deg Berkeley grid this script interpolates onto. The global band needs a wider
+# one: outside the US the network is sparse enough that 115 km would leave most
+# of the band empty. Set it from the coverage diagnostic the CHECK block prints.
+IDW_RADIUS_KM_CONUS  = 115.0
+IDW_RADIUS_KM_GLOBAL = 300.0
+IDW_MIN_STATIONS     = 2          # cells with fewer in-range reporters fail ...
+IDW_SOLO_WSUM        = 1.5        # ... unless the one they have is this close:
+                                  # sqrt(sum (R/d)^2) > 1.5 means d < R/1.5.
+# (I5) the bottom-row GHCN panel. "stations" puts it in Christy's order --
+#      count at stations, then grid -- instead of reading the 2 deg grid of
+#      daily TEMPERATURES that prepare_data.py builds, which counts second.
+GHCND_GLOBAL_SOURCE = "stations"  # "stations" (Christy order) | "grid2deg" (v F)
 
 # The paper's copy of this figure carries a title above the panel grid; the
 # notebook's plot block did not draw one. Set to None to get the bare grid.
@@ -83,6 +125,9 @@ C = {"Berkeley": "#009E73", "GHCND": "#E63946", "ERA5": "#F59E0B",
 # is most of the record; same hue keeps it reading as Berkeley, the darker value
 # keeps it readable as a separate line.
 C_SAMPLED = "#00513C"
+# (I9) the third Berkeley value: light enough to separate from both greens above
+# at 2.5 pt, still unmistakably the Berkeley hue.
+C_COSAMP = "#7FD3B8"
 # (A) one style vocabulary for the whole figure:
 #   solid     homogenised / bias-corrected / reanalysis
 #   dot-dash  UNCORRECTED station data (GHCN-Daily, USHCN-Daily raw)
@@ -92,10 +137,25 @@ C_SAMPLED = "#00513C"
 LS_ADJ     = "-"
 LS_UNCORR  = (0, (6.5, 1.8, 1.0, 1.8))     # long dash, dot -- uncorrected
 LS_SAMPLED = (0, (7.0, 2.4))               # long open dash -- re-sampled
+LS_COSAMP  = (0, (1.6, 1.9))               # dot -- (I9) a SUBSET of the cells
 LS_RAW = LS_UNCORR                      # v F name kept so nothing downstream breaks
 
 _PCTILE, _WINDOW, _MIN_RUN, _MIN_FRAC = 90, 3, 6, 0.70
 _HW_MON, _N_DOY = {5, 6, 7, 8, 9}, 153
+
+# (I6) every cached series is tagged with the method that produced it. The one
+# failure mode here that would look entirely plausible on screen is a figure
+# drawn half from v F pickles and half from Christy's -- (I1)-(I3) change
+# christy_fields, so the GRIDDED caches go stale too, not just the station ones.
+# A run under one set of switches must not be able to read a cache written under
+# another, so the switches are in the filename. Same idea as common.TAG_F3.
+_TAG_THR = (f"p{_PCTILE}r{_MIN_RUN}w{_WINDOW}n{MIN_THRESH_N}"
+            f"_{'nr' if PCTILE_METHOD == 'nearest_rank' else 'lin'}"
+            f"{'ge' if EXCEED_INCLUSIVE else 'gt'}")
+_TAG_STN = f"{_TAG_THR}_{'idw' if STATION_REDUCTION == 'idw_grid' else 'stnmean'}"
+
+def _tag_idw(radius_km):
+    return f"{_TAG_STN}{radius_km:g}"
 
 def mask_conus(lat, lon, key):
     fp = CACHE_HW / f"maskconus_{key}.npy"
@@ -117,6 +177,31 @@ def _season_doy(times):
     ts = pd.DatetimeIndex(times)
     return (ts.dayofyear.to_numpy() - np.where(ts.is_leap_year, 121, 120)).astype(np.int16)
 
+def _nearest_rank(vals, pctile):
+    """(I1) Christy's percentile, us_dly_waves.py:197-201: sort the finite values
+    of each column and take sorted[int(n * pctile / 100)], clipped to n-1.
+
+    np.sort sends NaN to the end of each column, so a column's n finite values
+    occupy its first n rows and the rank index can differ from column to column.
+
+    Not np.percentile(method="inverted_cdf"): that agrees with Christy whenever
+    n*p/100 falls between two integers and sits one rank low when it lands on
+    one. With a 7-day window at the 90th percentile the product is 6.3*n_years,
+    an integer for every record whose length is a multiple of 5 -- common enough
+    that the two estimators would visibly disagree.
+
+    The arithmetic is written in Christy's order, n * pctile * 0.01 rather than
+    n * (pctile * 0.01), because int() of the two differs in the last bit."""
+    s = np.sort(vals, axis=0)
+    n = np.isfinite(vals).sum(axis=0)
+    idx = np.minimum((n * pctile * 0.01).astype(np.int64), np.maximum(n - 1, 0))
+    out = np.take_along_axis(s, idx[np.newaxis], axis=0)[0]
+    return np.where(n > 0, out, np.nan)
+
+def _exceeds(tx, thr):
+    """(I2) Christy counts a day that sits exactly ON its threshold."""
+    return tx >= thr if EXCEED_INCLUSIVE else tx > thr
+
 def _thresholds(tx_s, doys):
     T, nlat, nlon = tx_s.shape
     thr = np.full((_N_DOY, nlat, nlon), np.nan, dtype=np.float32)
@@ -126,11 +211,14 @@ def _thresholds(tx_s, doys):
         vals = tx_s[m]
         if vals.shape[0] == 0:
             continue
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            p = np.nanpercentile(vals, _PCTILE, axis=0)
+        if PCTILE_METHOD == "nearest_rank":                        # (I1)
+            p = _nearest_rank(vals, _PCTILE)
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                p = np.nanpercentile(vals, _PCTILE, axis=0)
         n = np.isfinite(vals).sum(axis=0)          # (7)
-        thr[doy - 1] = np.where(n >= MIN_THRESH_N, p, np.nan)
+        thr[doy - 1] = np.where(n >= MIN_THRESH_N, p, np.nan)      # (I3)
     return thr
 
 def _count_hw(exceed):
@@ -167,7 +255,7 @@ def christy_fields(tx_s, doys, yrs, label=""):
     for yr in np.unique(yrs):
         m = yrs == yr; tx = tx_s[m]; dy = doys[m]
         vf = np.sum(~np.isnan(tx), axis=0) / _N_DOY
-        exc = (~np.isnan(tx)) & np.isfinite(thr[dy - 1]) & (tx > thr[dy - 1])
+        exc = (~np.isnan(tx)) & np.isfinite(thr[dy - 1]) & _exceeds(tx, thr[dy - 1])
         hw = _count_hw(exc)
         hw[vf < _MIN_FRAC] = np.nan
         fields[int(yr)] = hw
@@ -204,24 +292,230 @@ def christy_series(tx_s, doys, yrs, lat, lon, mask=None,
                           lat, lon, mask=mask,
                           lat_bnds=lat_bnds, lon_bnds=lon_bnds, label=label)
 
-def christy_series_stations(tx_s, doys, yrs, stn_lats, label=""):
+def christy_station_counts(tx_s, doys, yrs, label=""):
+    """(I4) Christy's nval_all, us_dly_waves.py:511: annual heat-wave-day counts
+    per station, NaN where the station-year missed the _MIN_FRAC rule.
+
+    Stops before any spatial reduction, so one pass over a dataset feeds both the
+    station mean and the IDW grid and the two can be priced against each other.
+    Returns (counts, years) with counts shaped (n_years, n_stn)."""
     doys = np.asarray(doys, np.int16); yrs = np.asarray(yrs, int)
     _assert_contiguous(doys, yrs, label)
     tx3 = tx_s[:, np.newaxis, :]
     thr = _thresholds(tx3, doys)
-    cosw = np.cos(np.radians(stn_lats))
-    series = {}
-    for yr in np.unique(yrs):
+    # (I7) A DEPARTURE FROM CHRISTY, and a necessary one. His loop sets
+    # nval[yi] = total for any year that clears the 70% data gate, even when the
+    # station has NO thresholds at all -- so a short record reports a hard ZERO
+    # heat-wave days rather than "unknown". Among his 1,218 uniformly long USHCN
+    # records that can never happen. Among the 24,874 stations of the global band
+    # more than half are in exactly that state, and a hard zero is not a missing
+    # value: it would be interpolated, averaged, and would drag the field down.
+    # So a unit also has to HAVE thresholds on _MIN_FRAC of the season.
+    tfrac = np.isfinite(thr).mean(axis=0)[0]
+    years = np.unique(yrs)
+    counts = np.full((years.size, tx_s.shape[1]), np.nan, np.float32)
+    for k, yr in enumerate(years):
         m = yrs == yr; tx = tx3[m]; dy = doys[m]
         vf = np.sum(~np.isnan(tx), axis=0)[0] / _N_DOY
-        exc = (~np.isnan(tx)) & np.isfinite(thr[dy - 1]) & (tx > thr[dy - 1])
+        exc = (~np.isnan(tx)) & np.isfinite(thr[dy - 1]) & _exceeds(tx, thr[dy - 1])
         hw = _count_hw(exc)[0]
-        hw[vf < _MIN_FRAC] = np.nan
-        valid = ~np.isnan(hw)
+        hw[(vf < _MIN_FRAC) | (tfrac < _MIN_FRAC)] = np.nan
+        counts[k] = hw
+    return counts, years
+
+def station_mean_series(counts, years, stn_lats):
+    """v F's reduction: one cos(lat) mean over STATIONS. Kept for
+    STATION_REDUCTION = "station_mean" and for the old-vs-new CHECK column."""
+    cosw = np.cos(np.radians(np.asarray(stn_lats, float)))
+    series = {}
+    for k, yr in enumerate(years):
+        hw = counts[k]; valid = ~np.isnan(hw)
         if not np.any(valid): continue
         w = cosw[valid]
         series[int(yr)] = float(np.nansum(hw[valid] * w) / np.nansum(w))
     return series
+
+def christy_series_stations(tx_s, doys, yrs, stn_lats, label=""):
+    """v F's signature, now a thin wrapper, exactly as christy_series is."""
+    counts, years = christy_station_counts(tx_s, doys, yrs, label=label)
+    return station_mean_series(counts, years, stn_lats)
+
+# ══ (I4) CHRISTY'S IDW: grid the COUNTS, then area-average ═════════════════
+EARTH_R_CHRISTY = 6335.44        # us_dly_waves.py:26 -- not the mean radius
+_PI180 = np.pi / 180.0
+
+def _christy_dist_km(cell_lat, cell_lon, stn_lat, stn_lon):
+    """Great-circle distance, transcribed from us_dly_waves.py:334, itself a
+    transcription of us_dly_waves.f:104-131. Subscript 1 = grid cell, 2 = station.
+
+    Two Fortran quirks are kept deliberately, because the object is to reproduce
+    Christy's station SELECTION rather than to improve on it:
+      * r = 6335.44 km, not the mean Earth radius 6371, so his kilometre runs
+        about 0.6% short and his 115 km reaches 115.6 real ones;
+      * the x1 term uses cos(cell_lat) where the textbook Vincenty form uses
+        cos(stn_lat).
+
+    Beyond a quarter of the globe the denominator turns negative and arctan
+    returns a NEGATIVE distance. Christy never meets that case -- his cells and
+    his stations are all inside the CONUS -- but the global row does, so callers
+    must reject d < 0 rather than let it pass the radius test."""
+    clat1 = np.cos(cell_lat * _PI180); slat1 = np.sin(cell_lat * _PI180)
+    clat2 = np.cos(stn_lat * _PI180);  slat2 = np.sin(stn_lat * _PI180)
+    slon21 = np.sin((stn_lon - cell_lon) * _PI180)
+    clon21 = np.cos((stn_lon - cell_lon) * _PI180)
+    x1 = (clat1 * slon21) ** 2
+    x2 = (clat2 * slat1 - slat2 * clat1 * clon21) ** 2
+    x5 = np.sqrt(x1 + x2) / (slat2 * slat1 + clat2 * clat1 * clon21)
+    return np.arctan(x5) * EARTH_R_CHRISTY
+
+def _christy_weights(cell_lat, cell_lon, stn_lat, stn_lon, radius_km):
+    """Sparse (n_cells, n_stn) matrix of (radius/d)^2 for every station STRICTLY
+    within radius_km of a cell centre (us_dly_waves.py:358-376).
+
+    A KD-tree on the unit sphere pre-selects candidate pairs and _christy_dist_km
+    then decides membership, so the answer is Christy's and only the search is
+    ours. The pre-filter is generous -- a true great-circle radius 5% wider than
+    the target, which more than covers both the 6335.44 km radius and the cosine
+    quirk -- so it cannot drop a pair Christy would have kept.
+
+    It is not an optimisation either. Dense, the global row would be 9,360 cells
+    by ~10,000 stations, and every far pair would have to be screened for the
+    negative-distance case above."""
+    from scipy.sparse import csr_matrix
+    cell_lat = np.asarray(cell_lat, float); cell_lon = np.asarray(cell_lon, float)
+    stn_lat = np.asarray(stn_lat, float);   stn_lon = np.asarray(stn_lon, float)
+    slack = 1.05 * EARTH_R / EARTH_R_CHRISTY
+    chord = 2.0 * np.sin(0.5 * (radius_km * slack) / EARTH_R)
+    tree = cKDTree(_xyz(stn_lat, stn_lon))
+    cand = tree.query_ball_point(_xyz(cell_lat, cell_lon), chord)
+    rows, cols, vals = [], [], []
+    for ic, js in enumerate(cand):
+        if not js: continue
+        js = np.asarray(js)
+        d = _christy_dist_km(cell_lat[ic], cell_lon[ic], stn_lat[js], stn_lon[js])
+        keep = (d >= 0) & (d < radius_km)              # strict, and sign-guarded
+        if not keep.any(): continue
+        js = js[keep]
+        d = np.maximum(d[keep], 1e-3)                  # us_dly_waves.py:371-373
+        rows.append(np.full(js.size, ic)); cols.append(js)
+        vals.append((radius_km / d) ** 2)
+    shape = (cell_lat.size, stn_lat.size)
+    if not rows:
+        return csr_matrix(shape)
+    return csr_matrix((np.concatenate(vals),
+                       (np.concatenate(rows), np.concatenate(cols))), shape=shape)
+
+def christy_idw_fields(counts, years, stn_lat, stn_lon, lat, lon, mask,
+                       radius_km, label=""):
+    """(I4) {year: (nlat, nlon) field} and {year: coverage}, us_dly_waves.py:379.
+
+    `counts` is christy_station_counts' (n_years, n_stn), NaN standing in for the
+    Fortran's -99: a station that did not report in a given year is dropped from
+    that year's interpolation entirely, so the grid follows the network as it
+    opens and closes. A cell is accepted only if IDW_MIN_STATIONS of them were in
+    range, or exactly one whose weights sum to more than IDW_SOLO_WSUM squared;
+    everything else stays NaN and _reduce_fields renormalises over what survived.
+
+    Coverage is Christy's ddd(0)/ddtot diagnostic (us_dly_waves.py:423): the
+    cos(lat) share of the masked domain that carried a value that year. Read it
+    before trusting a series -- it is what says whether the domain is holding
+    still or quietly shrinking into the well-observed corners."""
+    lat = np.asarray(lat, float)
+    lon = np.where(np.asarray(lon, float) > 180.0,
+                   np.asarray(lon, float) - 360.0, np.asarray(lon, float))
+    LON, LAT = np.meshgrid(lon, lat)
+    m = np.ones(LAT.shape, bool) if mask is None else np.asarray(mask, bool)
+    assert m.shape == LAT.shape, \
+        f"{label}: mask {m.shape} does not match grid {LAT.shape}"
+    ci = np.flatnonzero(m.ravel())
+    assert ci.size, f"{label}: the mask selects no cells"
+    clat, clon = LAT.ravel()[ci], LON.ravel()[ci]
+
+    W = _christy_weights(clat, clon, stn_lat, stn_lon, radius_km)
+    Wb = W.copy(); Wb.data = np.ones_like(Wb.data)     # in-range INDICATOR
+    cosw = np.cos(np.radians(clat)); cos_tot = cosw.sum()
+
+    fields, coverage = {}, {}
+    for k, yr in enumerate(years):
+        v = counts[k]
+        rep = np.isfinite(v).astype(np.float64)        # reported this year
+        if not rep.any(): continue
+        dd  = W  @ rep                                 # sum of weights, in range
+        num = W  @ np.where(rep > 0, v, 0.0)
+        nst = Wb @ rep                                 # how many, in range
+        # us_dly_waves.py:408. The (radius/d)^2 constant cancels in num/dd but
+        # NOT in this test, which is why the weights are carried in Christy's
+        # units rather than as a bare d^-2.
+        acc = ((nst >= IDW_MIN_STATIONS)
+               | ((nst == 1) & (np.sqrt(dd) > IDW_SOLO_WSUM))) & (dd > 0)
+        if not acc.any(): continue
+        flat = np.full(m.size, np.nan)
+        flat[ci[acc]] = num[acc] / dd[acc]
+        fields[int(yr)] = flat.reshape(m.shape)
+        coverage[int(yr)] = float(cosw[acc].sum() / cos_tot)
+    return fields, coverage
+
+FIXED_CELLS = {}       # (I8) label -> (series on the never-missing cells, n, n_tot)
+IDW_FIELDS = {}        # (I9) label -> {year: gridded field}, for co-sampling
+
+def reduce_on_footprint(fields, lat, lon, mask, footprint, lon_bnds=(-180., 180.),
+                        label=""):
+    """(I9) The same field, averaged only over the cells another line had a
+    value in THAT year.
+
+    This is the honest way to show what a moving footprint is worth. The
+    fixed-cell diagnostic (I8) answers the question by throwing away every cell
+    that was ever missing -- on the global band that is three quarters of the
+    land. Here nothing is thrown away and nothing about the data changes; only
+    which cells are allowed to speak, year by year. The gap between this line
+    and the full-grid one is then attributable to coverage alone, because the
+    two are the same dataset on the same grid in the same year."""
+    base = np.asarray(mask, bool)
+    out = {}
+    for y, f in fields.items():
+        fp = footprint.get(y)
+        if fp is None:
+            continue
+        m = base & fp
+        if not m.any():
+            continue
+        s = _reduce_fields({y: f}, lat, lon, mask=m, lat_bnds=(24., 50.),
+                           lon_bnds=lon_bnds, label=label)
+        if y in s:
+            out[y] = s[y]
+    return out
+
+def footprint_of(label):
+    """(I9) which cells an IDW line actually carried a value in, per year."""
+    return {y: ~np.isnan(f) for y, f in IDW_FIELDS.get(label, {}).items()}
+
+def christy_idw_series(counts, years, stn_lat, stn_lon, lat, lon, mask,
+                       radius_km, lon_bnds=(-180., 180.), label=""):
+    """(I4) the whole of Christy's reduction: grid the counts, then hand them to
+    _reduce_fields -- the SAME cos(lat) area mean the gridded datasets go
+    through, on the same cells, so a station line and the Berkeley line beside it
+    differ in their data and in nothing else."""
+    fields, coverage = christy_idw_fields(counts, years, stn_lat, stn_lon,
+                                          lat, lon, mask, radius_km, label=label)
+    series = _reduce_fields(fields, lat, lon, mask=mask,
+                            lat_bnds=(24., 50.), lon_bnds=lon_bnds, label=label)
+    # (I8) The same series over the cells accepted in EVERY year. Christy lets
+    # the footprint drift -- his denominator is the accepted cells of that year,
+    # which is what `series` above reproduces -- and on his dense, stable USHCN
+    # network the drift is small. It is not small here, and a drifting footprint
+    # means an early decade is being compared against a different piece of
+    # ground, not only a different climate. Reported, never substituted: which
+    # of the two belongs in the paper is a judgement about the science.
+    common = np.ones_like(np.asarray(mask, bool))
+    for f in fields.values():
+        common &= ~np.isnan(f)
+    fixed = (_reduce_fields({y: f for y, f in fields.items()}, lat, lon,
+                            mask=np.asarray(mask, bool) & common,
+                            lat_bnds=(24., 50.), lon_bnds=lon_bnds, label=label)
+             if common.any() else {})
+    FIXED_CELLS[label] = (fixed, int(common.sum()), int(np.asarray(mask, bool).sum()))
+    IDW_FIELDS[label] = fields                          # (I9)
+    return series, coverage
 
 def _reindex_full(vals, times, label):
     """Force the array onto the complete MJJAS calendar, so no missing row can
@@ -238,19 +532,59 @@ def _reindex_full(vals, times, label):
         vals = out
     return vals, _season_doy(full), full.year.values.astype(int)
 
-# ══ CONUS LOADERS ══════════════════════════════════════════════════════════
-def ld_be_conus():
-    fp = BE_TMAX
-    ds = xr.open_dataset(fp)
+# ══ (I4) THE TARGET GRIDS ══════════════════════════════════════════════════
+# Christy grids to his own half-degree CONUS mask (usreg_half.txt, 116x50). This
+# script grids to the BERKELEY grid instead, in both rows, so that every line in
+# a panel sits on the same cells and the panels can be differenced cell by cell.
+# The IDW's radius and acceptance rule are properties of the search and not of
+# the cell, so they carry over to the coarser grid untouched.
+#
+# If a half-degree sensitivity test is ever wanted, common.g05_centers() already
+# reproduces Christy's grid exactly -- 25.25..49.75 N by -124.25..-66.75 E.
+def be_conus_grid():
+    """Berkeley's CONUS grid and mask without reading its 4 GB temperature cube.
+    Must agree with ld_be_conus() cell for cell; the CHECK block asserts it."""
+    fp = CACHE_HW / "be_conus_grid.npz"
+    if fp.exists():
+        z = np.load(fp); return z["lat"], z["lon"], z["mask"]
+    ds = xr.open_dataset(BE_TMAX)
     lat, lon = ds.latitude.values, ds.longitude.values
     lm = ds["land_mask"]
     lm = (lm.isel(time=0) if "time" in lm.dims else lm).values >= 0.5
+    ds.close()
+    m = lm & mask_conus(lat, lon, "be_us")
+    np.savez(fp, lat=lat, lon=lon, mask=m)
+    return lat, lon, m
+
+def be_global_grid():
+    """Berkeley's northern-band grid and land mask, ld_be_global()'s cells."""
+    fp = CACHE_HW / "be_global_grid.npz"
+    if fp.exists():
+        z = np.load(fp); return z["lat"], z["lon"], z["mask"]
+    files = sorted(BE_PROC.glob(
+        "processed_nh_TMAX_Complete_TMAX_Daily_LatLong1_????.nc"))
+    assert files, f"no Berkeley NH decade files under {BE_PROC}"
+    ds = xr.open_dataset(files[0])
+    lat_all = ds.latitude.values
+    keep = (lat_all >= 23) & (lat_all <= 51)           # ld_be_global's subset
+    sub = ds.isel(latitude=np.where(keep)[0])
+    lat, lon = sub.latitude.values, sub.longitude.values
+    lm = sub["land_mask"]
+    m = (lm.isel(time=0) if "time" in lm.dims else lm).values > 0
+    ds.close()
+    np.savez(fp, lat=lat, lon=lon, mask=m)
+    return lat, lon, m
+
+# ══ CONUS LOADERS ══════════════════════════════════════════════════════════
+def ld_be_conus():
+    ds = xr.open_dataset(BE_TMAX)
     times = pd.DatetimeIndex(ds.time.values)
     sm = np.isin(times.month, list(_HW_MON))
     tx = ds["temperature"].values[sm].astype(np.float32)
     ds.close()
     tx, dy, yr = _reindex_full(tx, times[sm], "BE US")
-    return tx, dy, yr, lat, lon, lm & mask_conus(lat, lon, "be_us")
+    lat, lon, m = be_conus_grid()       # (I4) one definition of grid and mask
+    return tx, dy, yr, lat, lon, m
 
 def _resolve_conus_grid_mask(lat, lon):
     """(5) usreg_half.txt is checked for orientation, not trusted."""
@@ -294,7 +628,9 @@ def ld_ghcnd_conus_stations():
     full = full[np.isin(full.month, list(_HW_MON))]
     assert V.shape[0] == len(full), \
         f"cube has {V.shape[0]} rows, the MJJAS calendar has {len(full)}"
-    return V, _season_doy(full), full.year.values.astype(int), pos["lat"].values.astype(np.float32)
+    return (V, _season_doy(full), full.year.values.astype(int),
+            pos["lat"].values.astype(np.float64),
+            pos["lon"].values.astype(np.float64))      # (I4) lon, for the IDW
 
 def ld_era5_conus():
     files = [ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc"
@@ -325,16 +661,14 @@ def ld_be_global():
     lat_all = ds.latitude.values
     keep = (lat_all >= 23) & (lat_all <= 51)                # (8) subset first
     sub = ds.isel(latitude=np.where(keep)[0])
-    lat, lon = sub.latitude.values, sub.longitude.values
     times = pd.DatetimeIndex(sub.time.values)
     _, uniq = np.unique(times.values, return_index=True)    # dedup decades
     sm = np.isin(times.month, list(_HW_MON))
     sm = sm & np.isin(np.arange(len(times)), uniq)
     tx = sub["temperature"].values[sm].astype(np.float32)
-    lm = sub["land_mask"]
-    lm = (lm.isel(time=0) if "time" in lm.dims else lm).values > 0   # (3)
     ds.close()
     tx, dy, yr = _reindex_full(tx, times[sm], "BE NH")
+    lat, lon, lm = be_global_grid()     # (I4)(3) one definition of grid and mask
     return tx, dy, yr, lat, lon, lm
 
 def ld_ghcnd_global():
@@ -351,6 +685,44 @@ def ld_ghcnd_global():
     ds.close()
     tx, dy, yr = _reindex_full(tx, times[sm], "GHCND 2deg")
     return tx, dy, yr, lat, lon, None            # station-derived: already land
+
+def ld_ghcnd_global_stations():
+    """(I5) the band as STATIONS, so the bottom row can count first and grid
+    second like the top row does. Same archive prepare_data.py builds the 2 deg
+    field from, read through common.ghcnd_band_cube().
+
+    The screen handed to that function is chosen to be LOSSLESS -- it may only
+    drop stations that provably cannot affect a single output number:
+
+      * a year needs ceil(_MIN_FRAC * _N_DOY) days, or (I7) blanks it anyway;
+      * a station needs at least one such year, or every year is NaN;
+      * and it needs enough observations for (I7)'s threshold coverage to be
+        reachable at all. A threshold at day d pools a window of at most
+        2*_WINDOW+1 days, so summing the window counts over the season counts
+        each observation at most that many times. Needing MIN_THRESH_N in each
+        of ceil(_MIN_FRAC * _N_DOY) windows therefore needs at least
+        ceil(_MIN_FRAC * _N_DOY) * MIN_THRESH_N / (2*_WINDOW+1) observations
+        in total -- about 3,100 at the current settings. Below that tfrac cannot
+        reach _MIN_FRAC, so every year of that station is NaN regardless.
+
+    Nothing here is a judgement about which stations "count"; the dropped ones
+    contribute NaN either way, and the screen exists only so the cube fits in
+    memory."""
+    need_days = int(np.ceil(_MIN_FRAC * _N_DOY))
+    need_tot = int(np.ceil(need_days * MIN_THRESH_N / (2 * _WINDOW + 1)))
+    ids, V, pos = ghcnd_band_cube(min_total_days=need_tot, min_good_years=1,
+                                  min_days_in_year=need_days)
+    V = V.astype(np.float32, copy=False)
+    assert pos["lat"].notna().all(), "band stations missing from the position table"
+    full = pd.date_range(f"{UH_YR0}-01-01", f"{UH_YR1}-12-31", freq="D")
+    full = full[np.isin(full.month, list(_HW_MON))]
+    assert V.shape[0] == len(full), \
+        f"band cube has {V.shape[0]} rows, the MJJAS calendar has {len(full)}"
+    print(f"  GHCN-Daily band: {len(ids):,} stations clear the lossless screen "
+          f"({need_tot:,} MJJAS days, one year of {need_days}+)")
+    return (V, _season_doy(full), full.year.values.astype(int),
+            pos["lat"].values.astype(np.float64),
+            pos["lon"].values.astype(np.float64))
 
 def ld_era5_global():
     files = [ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc"
@@ -455,7 +827,7 @@ def _network_positions(net):
 
 NET_TITLE = {"ushcn": "USHCN", "ghcnd": "GHCN-Daily"}
 
-def _be_at_network(fields, lat, lon, be_mask, net, label=""):
+def _be_at_network_counts(fields, lat, lon, be_mask, net):
     """FIGURE 3's convention, applied to the heat-wave field.
 
     Fig 3 does   BE_AT_V = BV[:, _flat[_good]]   -- one column per STATION, so a
@@ -463,9 +835,11 @@ def _be_at_network(fields, lat, lon, be_mask, net, label=""):
     the weight. That is what makes the line inherit the network's DENSITY and
     not merely its footprint. Here the same indexing is applied to the per-cell
     heat-wave counts (identical, since every duplicate column of a cell has the
-    same values and therefore the same thresholds), and the units are then
-    reduced by cos(lat) exactly as christy_series_stations reduces the real
-    station lines."""
+    same values and therefore the same thresholds).
+
+    Returns (counts, years, slat, slon) -- the same shape christy_station_counts
+    returns, so _reduce_stations can take it through whichever reduction the real
+    station lines are using."""
     lat = np.asarray(lat, float)
     lon = np.asarray(lon, float)
     lonw = np.where(lon > 180.0, lon - 360.0, lon)
@@ -476,51 +850,77 @@ def _be_at_network(fields, lat, lon, be_mask, net, label=""):
     flat = np.ravel_multi_index((il[ok], io[ok]), (lat.size, lonw.size))
     good = np.asarray(be_mask, bool).ravel()[flat]      # Fig 3's _good
     cols = flat[good]
-    ulat = slat[ok][good]
-    cosw = np.cos(np.radians(ulat))
-    series = {}
-    for yr in sorted(fields):
-        v = fields[yr].ravel()[cols]
-        valid = ~np.isnan(v)
-        if not np.any(valid): continue
-        w = cosw[valid]
-        series[int(yr)] = float(np.nansum(v[valid] * w) / np.nansum(w))
-    return series
+    # (I4) The comparator has to travel the same road as the lines it is
+    # compared with. If the USHCN lines are counted at stations and then gridded
+    # while this one stays a station mean, their ratio stops isolating SAMPLING
+    # and starts carrying the reduction as well -- which is the one thing this
+    # dashed line exists to hold fixed. So this function now stops at the
+    # pseudo-station counts and hands them to the same _reduce_stations.
+    years = np.array(sorted(fields))
+    counts = np.stack([fields[y].ravel()[cols] for y in years]).astype(np.float32)
+    return counts, years, slat[ok][good], slon[ok][good]
+
+def be_fields(which):
+    """(I9) Berkeley's per-CELL heat-wave counts, cached as a cube.
+
+    Needed twice over: once for the Berkeley line itself, and once for the
+    co-sampled line, which has to be re-reduced on a different set of cells
+    every year and so cannot be formed from an already-reduced series. Small
+    enough to keep -- 0.8 MB for CONUS, 4.7 MB for the band -- and it means a
+    warm run never has to reopen the 4 GB Berkeley file to add the second line.
+    Returns ({year: field}, lat, lon, mask)."""
+    fp = CACHE_HW / f"berkeley_{which}_fields_{_TAG_THR}.npz"
+    lat, lon, mask = be_conus_grid() if which == "conus" else be_global_grid()
+    if fp.exists():
+        z = np.load(fp)
+        return ({int(y): f for y, f in zip(z["years"], z["fields"])},
+                lat, lon, mask)
+    tx, doys, yrs, lat, lon, mask = (ld_be_conus() if which == "conus"
+                                     else ld_be_global())
+    fields = christy_fields(tx, doys, yrs, label=f"Berkeley {which}")
+    del tx
+    yy = np.array(sorted(fields))
+    np.savez(fp, years=yy, fields=np.stack([fields[y] for y in yy]))
+    return fields, lat, lon, mask
 
 def _run_be_conus_set():
     """(B)(C) one Berkeley read, three lines: the full CONUS average (identical
     to v F, same cache) and the network-sampled averages."""
-    pkl_full = CACHE_HW / "berkeley_landmasked.pkl"
-    pkls = {n: CACHE_HW / f"berkeley_at_{n}_stations.pkl" for n in BE_AT_NETWORKS}
+    pkl_full = CACHE_HW / f"berkeley_landmasked_{_TAG_THR}.pkl"
+    # (I4) cache the per-station COUNTS, not the finished series -- the same
+    # rule _run_stations follows. Caching the series would skip _reduce_stations
+    # on a warm run, and this line would then vanish from the coverage, the
+    # old-versus-new and the fixed-cell tables: the reduction is what fills them.
+    npzs = {n: CACHE_HW / f"berkeley_at_{n}_counts_{_TAG_THR}.npz"
+            for n in BE_AT_NETWORKS}
     nets = [n for n in BE_AT_NETWORKS
             if n != "ushcn" or uh_available()]
-    out = {}
+    held = {}
     full = None
     if pkl_full.exists():
         with open(pkl_full, "rb") as f: full = pickle.load(f)
     for n in nets:
-        if pkls[n].exists():
-            with open(pkls[n], "rb") as f: out[n] = pickle.load(f)
-    todo = [n for n in nets if n not in out]
-    if full is not None and not todo:
-        return full, out
+        if npzs[n].exists():
+            z = np.load(npzs[n])
+            held[n] = (z["counts"], z["years"], z["slat"], z["slon"])
+    todo = [n for n in nets if n not in held]
 
-    tx, doys, yrs, lat, lon, be_mask = ld_be_conus()
-    fields = christy_fields(tx, doys, yrs, label="Berkeley CONUS")
-    del tx
-    if full is None:
-        full = _reduce_fields(fields, lat, lon, mask=be_mask,
-                              lat_bnds=(24., 50.), lon_bnds=(-125., -65.),
-                              label="Berkeley CONUS")
-        with open(pkl_full, "wb") as f: pickle.dump(full, f)
-    for n in todo:
-        out[n] = _be_at_network(fields, lat, lon, be_mask, n,
-                                label=f"Berkeley @ {NET_TITLE[n]}")
-        with open(pkls[n], "wb") as f: pickle.dump(out[n], f)
-    for lbl, d in [("full CONUS", full)] + [(f"at {NET_TITLE[n]}", out[n])
-                                            for n in nets]:
-        if d:
-            v = [x for x in d.values() if not np.isnan(x)]
+    if full is None or todo:
+        fields, lat, lon, be_mask = be_fields("conus")        # (I9) cached cube
+        if full is None:
+            full = _reduce_fields(fields, lat, lon, mask=be_mask,
+                                  lat_bnds=(24., 50.), lon_bnds=(-125., -65.),
+                                  label="Berkeley CONUS")
+            with open(pkl_full, "wb") as f: pickle.dump(full, f)
+        for n in todo:
+            held[n] = _be_at_network_counts(fields, lat, lon, be_mask, n)
+            np.savez(npzs[n], counts=held[n][0], years=held[n][1],
+                     slat=held[n][2], slon=held[n][3])
+
+    grid = be_conus_grid()
+    out = {n: _reduce_stations(*held[n], grid, IDW_RADIUS_KM_CONUS,
+                               (-125., -65.), f"Berkeley @ {NET_TITLE[n]}")
+           for n in nets}
     return full, out
 
 # ══ CHECK -- the heat-wave kernel on synthetic numbers. Needs no data files. ══
@@ -561,6 +961,72 @@ try:
     raise AssertionError("a broken day axis should have been rejected")
 except ValueError as _e:
     print(f"_assert_contiguous: broken day axis rejected -- {str(_e)[:60]}...")
+
+# ── (I) the Christy-compliance checks ──────────────────────────────────────
+# 6. (I1) the percentile is a RANK into the sorted sample, not an interpolation.
+#    n = 10, p = 90 puts n*p/100 exactly on 9, and the three estimators split.
+_v = np.arange(1.0, 11.0, dtype=np.float32).reshape(10, 1, 1)
+assert _nearest_rank(_v, 90)[0, 0] == 10.0
+assert np.percentile(_v.ravel(), 90, method="inverted_cdf") == 9.0
+assert np.isclose(np.percentile(_v.ravel(), 90), 9.1)
+print("_nearest_rank: n=10 p=90 -> 10.0 "
+      "(numpy's inverted_cdf gives 9.0, its default 9.1)")
+
+# 7. NaN sorts to the end, so each column's rank is read off its finite head
+_x = np.array([[[5.0]], [[np.nan]], [[1.0]], [[3.0]], [[9.0]]], np.float32)
+assert _nearest_rank(_x, 50)[0, 0] == 5.0          # finite [1,3,5,9], idx 2
+assert _nearest_rank(_x, 25)[0, 0] == 3.0          # finite [1,3,5,9], idx 1
+print("_nearest_rank: NaN sort out of the way; the rank indexes the finite values")
+
+# 8. (I2) a day sitting exactly ON its threshold is a hot day
+_tx = np.array([[[10.0]]], np.float32); _th = np.array([[10.0]], np.float32)
+assert bool(_exceeds(_tx[0], _th)[0, 0]) is EXCEED_INCLUSIVE
+print(f"_exceeds: a day equal to its threshold counts = {EXCEED_INCLUSIVE} "
+      "(Christy's >=; v F used a strict >)")
+
+# 9. (I4) Christy's distance, with its two deliberate quirks intact
+_d1 = _christy_dist_km(40.0, -100.0, 41.0, -100.0)
+assert 110.0 < _d1 < 111.0, _d1
+print(f"_christy_dist_km: 1 deg of latitude at 40N = {_d1:.2f} km; a 6371 km "
+      f"sphere gives 111.19, and the 0.6% shortfall is Christy's 6335.44")
+#    beyond a quarter of the globe arctan flips sign. Christy never meets the
+#    case, the global row would meet it constantly, and a negative distance
+#    would sail through a "< radius" test and then weight as if colocated.
+assert _christy_dist_km(40.0, -100.0, -40.0, 80.0) < 0
+print("_christy_dist_km: an antipodal pair returns a NEGATIVE distance -- "
+      "_christy_weights rejects d < 0 rather than letting it pass the radius")
+
+# 10. (I4) the IDW reproduces a station sitting on the cell centre
+_cl, _co = np.array([40.0]), np.array([-100.0])
+_sl, _so = np.array([40.0, 40.5]), np.array([-100.0, -100.0])
+_f, _cov = christy_idw_fields(np.array([[7.0, 3.0]], np.float32), np.array([2000]),
+                              _sl, _so, _cl, _co, np.ones((1, 1), bool), 115.0)
+assert abs(_f[2000][0, 0] - 7.0) < 1e-6, _f[2000]
+print(f"christy_idw_fields: a station on the cell centre is reproduced exactly "
+      f"({_f[2000][0, 0]:.4f}), the 1 m floor giving it all the weight")
+
+# 11. (I4) the acceptance rule, and why the 115 km constant has to stay. It
+#     cancels out of the weighted mean, so it looks removable -- but the solo
+#     test reads it, and without it every one-station cell would be thrown away.
+for _n_in, _dist, _want in ((0, 200.0, False), (1, 90.0, False),
+                            (1, 70.0, True), (2, 110.0, True)):
+    _dd = _n_in * (115.0 / _dist) ** 2
+    _got = (_n_in >= IDW_MIN_STATIONS
+            or (_n_in == 1 and np.sqrt(_dd) > IDW_SOLO_WSUM))
+    assert _got == _want, (_n_in, _dist, _got)
+assert not np.sqrt(((1.0 / np.array([50.0])) ** 2).sum()) > IDW_SOLO_WSUM
+print(f"IDW acceptance: {IDW_MIN_STATIONS}+ stations in range, or one inside "
+      f"{115.0 / IDW_SOLO_WSUM:.1f} km; drop the constant and the solo rule "
+      f"would silently reject every cell")
+
+# 12. (I7) a unit with data but no thresholds must report NaN, not a hard zero.
+#     One year of data can never clear MIN_THRESH_N, so nothing is countable.
+_tx1 = np.linspace(20, 40, _N_DOY, dtype=np.float32)[:, None]
+_c1, _y1 = christy_station_counts(_tx1, np.arange(1, _N_DOY + 1, dtype=np.int16),
+                                  np.full(_N_DOY, 2000), label="check")
+assert np.isnan(_c1[0, 0]), _c1
+print("christy_station_counts: a station with no usable thresholds reports NaN, "
+      "not 0 heat-wave days (Christy's loop would have said 0)")
 print("\nheat-wave kernel checks passed\n")
 
 # ══ RUN ════════════════════════════════════════════════════════════════════
@@ -576,32 +1042,64 @@ def _run(label, loader, pkl_name, lon_bnds=(-125., -65.)):
     v = [x for x in hw.values() if not np.isnan(x)]
     return hw
 
-def _run_stations(label, loader, pkl_name):
-    pkl = CACHE_HW / pkl_name
-    if pkl.exists():
-        with open(pkl, "rb") as f: return pickle.load(f)
-    tx, doys, yrs, lats = loader()
-    hw = christy_series_stations(tx, doys, yrs, lats, label=label)
-    with open(pkl, "wb") as f: pickle.dump(hw, f)
-    v = [x for x in hw.values() if not np.isnan(x)]
+COVERAGE = {}          # (I4) label -> {year: accepted cos(lat) share}
+OLD_METHOD = {}        # (I4) label -> the station-mean series, for the CHECK table
+
+def _reduce_stations(counts, years, slat, slon, grid, radius_km, lon_bnds, label):
+    """(I4) one place where a station network becomes a series, so the GHCN,
+    USHCN and Berkeley-at-network lines cannot drift apart. Both reductions are
+    computed -- the IDW is cheap once the counts exist, and the CHECK table
+    prints what the choice costs."""
+    old = station_mean_series(counts, years, slat)
+    OLD_METHOD[label] = old
+    if STATION_REDUCTION != "idw_grid":
+        return old
+    lat, lon, mask = grid
+    hw, cov = christy_idw_series(counts, years, slat, slon, lat, lon, mask,
+                                 radius_km, lon_bnds=lon_bnds, label=label)
+    COVERAGE[label] = cov
     return hw
 
+def _run_stations(label, loader, pkl_name, grid=None,
+                  radius_km=IDW_RADIUS_KM_CONUS, lon_bnds=(-125., -65.)):
+    """The counts are cached, not the series: they are the expensive half and
+    they do not depend on the reduction, so switching STATION_REDUCTION re-reads
+    them in seconds instead of re-thresholding the whole cube."""
+    npz = CACHE_HW / f"{pkl_name}_counts_{_TAG_THR}.npz"
+    if npz.exists():
+        z = np.load(npz)
+        counts, years, slat, slon = z["counts"], z["years"], z["slat"], z["slon"]
+    else:
+        tx, doys, yrs, slat, slon = loader()
+        counts, years = christy_station_counts(tx, doys, yrs, label=label)
+        del tx
+        np.savez(npz, counts=counts, years=years, slat=slat, slon=slon)
+    if grid is None:
+        grid = be_conus_grid()
+    return _reduce_stations(counts, years, slat, slon, grid, radius_km,
+                            lon_bnds, label)
+
 def _run_ushcn_pair(legs_wanted=USHCN_LEGS):
-    pkls = {leg: CACHE_HW / f"ushcn_pair_{leg}_stations.pkl" for leg in legs_wanted}
-    out = {}
-    todo = [leg for leg in legs_wanted if not pkls[leg].exists()]
+    npzs = {leg: CACHE_HW / f"ushcn_pair_{leg}_counts_{_TAG_THR}.npz"
+            for leg in legs_wanted}
+    held, todo = {}, [leg for leg in legs_wanted if not npzs[leg].exists()]
     for leg in legs_wanted:
-        if pkls[leg].exists():
-            with open(pkls[leg], "rb") as f: out[leg] = pickle.load(f)
-    if not todo: return out
-    legs, doys, yrs, stns = ld_ushcn_pair()
-    lats = stns["lat"].values.astype(np.float32)
-    for leg in todo:
-        hw = christy_series_stations(legs[leg], doys, yrs, lats, label=f"USHCN {leg}")
-        with open(pkls[leg], "wb") as f: pickle.dump(hw, f)
-        v = [x for x in hw.values() if not np.isnan(x)]
-        out[leg] = hw
-    return out
+        if npzs[leg].exists():
+            z = np.load(npzs[leg])
+            held[leg] = (z["counts"], z["years"], z["slat"], z["slon"])
+    if todo:
+        legs, doys, yrs, stns = ld_ushcn_pair()
+        slat = stns["lat"].values.astype(np.float64)
+        slon = stns["lon"].values.astype(np.float64)
+        for leg in todo:
+            counts, years = christy_station_counts(legs[leg], doys, yrs,
+                                                   label=f"USHCN {leg}")
+            np.savez(npzs[leg], counts=counts, years=years, slat=slat, slon=slon)
+            held[leg] = (counts, years, slat, slon)
+    grid = be_conus_grid()
+    return {leg: _reduce_stations(*held[leg], grid, IDW_RADIUS_KM_CONUS,
+                                  (-125., -65.), f"USHCN {leg}")
+            for leg in legs_wanted}
 
 _be_c, _be_net = _run_be_conus_set()                      # (B)
 if BLANK_BE_PARTIAL:                                      # (4)
@@ -611,38 +1109,86 @@ if BLANK_BE_PARTIAL:                                      # (4)
 _be_u = _be_net.get("ushcn", {}) if DRAW_BE_AT_USHCN else {}
 
 _gh_stn = _run_stations("GHCN-Daily CONUS (stations)", ld_ghcnd_conus_stations,
-                        "ghcnd_stations.pkl")
+                        "ghcnd_stations")
 _gh_grd = (_run("GHCND-Daily CONUS (Christy grid)", ld_ghcnd_conus_grid,
-                f"ghcnd_idw_mask-{USREG_MODE}.pkl", (-125., -65.))
+                f"ghcnd_idw_mask-{USREG_MODE}_{_TAG_THR}.pkl", (-125., -65.))
            if (COMPARE_BOTH_GHCND or GHCND_CONUS_SOURCE == "christy_grid") else {})
 _gh_c = _gh_stn if GHCND_CONUS_SOURCE == "stations" else _gh_grd
 
 R_conus = {"Berkeley": _be_c, "GHCND": _gh_c,
            "ERA5": _run("ERA5 CONUS (land-masked)", ld_era5_conus,
-                        "era5_landmasked.pkl", (-125., -65.))}
+                        f"era5_landmasked_{_TAG_THR}.pkl", (-125., -65.))}
 
 _be_g = _run("Berkeley NH global (land-masked)", ld_be_global,
-             "berkeley_nh_landmasked.pkl", (-180., 180.))
+             f"berkeley_nh_landmasked_{_TAG_THR}.pkl", (-180., 180.))
 if BLANK_BE_PARTIAL and 2024 in _be_g:
     _be_g = {k: v for k, v in _be_g.items() if k != 2024}
-R_global = {"Berkeley": _be_g,
-            "GHCND": _run("GHCND 2deg global", ld_ghcnd_global,
-                          "ghcnd_2deg_glb.pkl", (-180., 180.)),
+# (I5) the bottom-row GHCN line, in Christy's order. "grid2deg" is v F: the 2 deg
+# field of daily TEMPERATURES that prepare_data.py builds, which counts second.
+_gh_g = (_run_stations("GHCN-Daily band (stations)", ld_ghcnd_global_stations,
+                       "ghcnd_band_stations", grid=be_global_grid(),
+                       radius_km=IDW_RADIUS_KM_GLOBAL, lon_bnds=(-180., 180.))
+         if GHCND_GLOBAL_SOURCE == "stations" else
+         _run("GHCND 2deg global", ld_ghcnd_global,
+              f"ghcnd_2deg_glb_{_TAG_THR}.pkl", (-180., 180.)))
+R_global = {"Berkeley": _be_g, "GHCND": _gh_g,
             "ERA5": _run("ERA5 global strip (land-masked)", ld_era5_global,
-                         "era5_global_landmasked.pkl", (-180., 180.))}
+                         f"era5_global_landmasked_{_TAG_THR}.pkl", (-180., 180.))}
 
 _uh = _run_ushcn_pair() if uh_available() else {}
 R_ushcn_raw, R_ushcn_adj = _uh.get("raw", {}), _uh.get("adj", {})
+
+# ══ (I9) BERKELEY ON GHCN'S OWN FOOTPRINT ══════════════════════════════════
+# Christy lets the interpolated footprint drift with the network, and that is
+# kept -- but on the global band it drifts from 47% of the land in the 1930s to
+# 84% today, so the era comparison there is partly a comparison of coverage.
+# Rather than pin the domain and lose three quarters of it, each row gains a
+# SECOND Berkeley line: the same Berkeley field, reduced each year over exactly
+# the cells GHCN carried a value in that year. Berkeley is the only dataset here
+# that exists everywhere, so it is the only one that can hold the climate fixed
+# and vary the footprint alone. The gap between the two green lines is what the
+# drift is worth; where they lie on top of each other, coverage is not the story.
+_GH_LBL_CONUS = "GHCN-Daily CONUS (stations)"
+_GH_LBL_BAND  = "GHCN-Daily band (stations)"
+
+def _be_on_ghcn(which, gh_label, lon_bnds):
+    fpr = footprint_of(gh_label)
+    if not fpr:
+        return {}
+    flds, lat, lon, mask = be_fields(which)
+    s = reduce_on_footprint(flds, lat, lon, mask, fpr, lon_bnds=lon_bnds,
+                            label=f"Berkeley on {gh_label}")
+    return {k: v for k, v in s.items() if not (BLANK_BE_PARTIAL and k == 2024)}
+
+_be_c_gh = _be_on_ghcn("conus", _GH_LBL_CONUS, (-125., -65.))
+_be_g_gh = _be_on_ghcn("global", _GH_LBL_BAND, (-180., 180.))
 
 # ══ CHECK -- Figure 6 series, before plotting. ═════════════════════════════
 def _pm_F6(d, y0, y1):
     _v = [d[y] for y in range(y0, y1 + 1) if y in d and not np.isnan(d[y])]
     return np.mean(_v) if _v else np.nan
-print(f"{'series':<34}{'years':>7}{'1930s':>8}{'2015-24':>9}{'ratio':>7}")
+
+# (I4) Christy's ddd(0)/ddtot. A series is only as trustworthy as the share of
+# the domain its accepted cells cover, and that share MOVES: the IDW follows the
+# network as it opens and closes, so an era with sparse coverage is being
+# compared against a different footprint, not just a different climate.
+if COVERAGE:
+    print("\nIDW coverage -- cos(lat) share of the masked domain carrying a value")
+    _eras = [(1900, 1929), (1930, 1939), (1940, 1969), (1970, 1999), (2000, 2024)]
+    print(f"  {'line':<30}" + "".join(f"{a}-{str(b)[2:]:>3}" for a, b in _eras))
+    for _lbl, _cov in COVERAGE.items():
+        _cells = [f"{_pm_F6(_cov, a, b):>8.2f}" for a, b in _eras]
+        print(f"  {_lbl:<30}" + "".join(_cells))
+
+print(f"\n{'series':<34}{'years':>7}{'1930s':>8}{'2015-24':>9}{'ratio':>7}")
 _rows = [("CONUS Berkeley", R_conus["Berkeley"]), ("CONUS GHCN-Daily", R_conus["GHCND"]),
          ("CONUS ERA5", R_conus["ERA5"]), ("USHCN-Daily (raw)", R_ushcn_raw),
          ("USHCN-BC (adjusted)", R_ushcn_adj), ("Berkeley sampled as USHCN", _be_u),
-         ("Global Berkeley", R_global["Berkeley"]), ("Global GHCN 2deg", R_global["GHCND"]),
+         ("Berkeley on GHCN's CONUS cells", _be_c_gh),
+         ("Global Berkeley", R_global["Berkeley"]),
+         ("Berkeley on GHCN's band cells", _be_g_gh),
+         (f"Global GHCN ({'stations' if GHCND_GLOBAL_SOURCE == 'stations' else '2deg'})",
+          R_global["GHCND"]),
          ("Global ERA5", R_global["ERA5"])]
 for _lbl, _d in _rows:
     if not _d:
@@ -652,14 +1198,49 @@ for _lbl, _d in _rows:
 print("\nthe point of the figure: with USHCN sampling the 1930s still exceed the present"
       "\n(ratio above 1.00), while the full Berkeley grid does not")
 
+# (I4) what the reduction alone is worth. Both are computed from one pass over
+# the counts, so this costs nothing and it is the only way to tell a change in
+# the SCIENCE from a change in the METHOD when reading this table against an
+# older run. Every number above is Christy's; every number here is v F's.
+if OLD_METHOD and STATION_REDUCTION == "idw_grid":
+    print(f"\nwhat the reduction is worth -- same counts, cos(lat) mean over "
+          f"STATIONS instead of over the grid ({_TAG_THR})")
+    print(f"  {'line':<32}{'1930s':>8}{'2015-24':>9}{'ratio':>7}")
+    for _lbl, _d in OLD_METHOD.items():
+        _a, _b = _pm_F6(_d, 1930, 1939), _pm_F6(_d, 2015, 2024)
+        print(f"  {_lbl:<32}{_a:>8.2f}{_b:>9.2f}{_a / _b:>7.2f}")
+
+# (I8) and what the DRIFTING footprint is worth. Read this next to the coverage
+# table above: where coverage moves a lot between eras, so does this.
+if FIXED_CELLS:
+    print("\nthe same lines over the cells accepted in EVERY year -- Christy lets "
+          "the\nfootprint drift, and this is the size of that choice")
+    print(f"  {'line':<32}{'cells':>12}{'1930s':>8}{'2015-24':>9}{'ratio':>7}")
+    for _lbl, (_d, _n, _nt) in FIXED_CELLS.items():
+        if not _d:
+            print(f"  {_lbl:<32}{'none':>12}"); continue
+        _a, _b = _pm_F6(_d, 1930, 1939), _pm_F6(_d, 2015, 2024)
+        print(f"  {_lbl:<32}{f'{_n}/{_nt}':>12}{_a:>8.2f}{_b:>9.2f}{_a / _b:>7.2f}")
+
 # ══ PLOT ═══════════════════════════════════════════════════════════════════
-def _smooth(d, w=SMOOTH_W):
-    """(6) year-indexed centred mean, full window required."""
+def _smooth(d):
+    """common.roll(): an 11-year centred mean (ROLL=11), matching Figure 3,
+    with its outer 5 years on each end filled by a local linear fit read at the
+    endpoint (END_METHOD="loclin") rather than left blank -- the least-squares
+    line through the same shrinking window, which inside the record IS the
+    window mean and only diverges from it at the ends, where it tracks a
+    trending tail instead of lagging it the way a plain mean would.
+
+    strict_interior=True keeps the plain full-window rule everywhere except
+    those outer positions: this script's IDW acceptance rule can in principle
+    leave a year uncovered in the interior of a record (figure6.py's `_reindex_
+    full` already guarantees the calendar has no holes, but a sparse year can
+    still fail every cell's accept test), and such a gap should stay a gap
+    rather than have a six-point line drawn through it."""
     if not d: return {}
     s = pd.Series(d).sort_index()
     s = s.reindex(range(int(s.index.min()), int(s.index.max()) + 1))
-    sm = s.rolling(w, center=True, min_periods=w).mean().dropna()
-    return sm.to_dict()
+    return roll(s, strict_interior=True).dropna().to_dict()
 
 PLOT_YRS = (1900, 2024)
 ROW_LABELS = ["CONUS", "Global 24–50°N"]
@@ -762,15 +1343,26 @@ _USHCN_LINES = [(lab, s, C["USHCN"], ls) for lab, s, ls in
 BE_AT_USHCN_THIN = False        # True to also draw its noisy annual trace
 _BE_LINES = ([("Berkeley, sampled as USHCN", _be_u, C_SAMPLED, LS_SAMPLED,
                BE_AT_USHCN_THIN)] if _be_u else [])
+# (I9) the co-sampled line is a third Berkeley trace, so it stays in the
+# Berkeley hue and takes a third VALUE of it -- light against the mid-green of
+# the full grid and the dark green of the USHCN-sampled line -- plus a dotted
+# pattern, which reads as "a subset of" next to solid and long-dash.
+_BE_LINES += ([("Berkeley, on GHCN's cells", _be_c_gh, C_COSAMP, LS_COSAMP,
+                False)] if _be_c_gh else [])
+_BE_LINES_G = ([("Berkeley, on GHCN's cells", _be_g_gh, C_COSAMP, LS_COSAMP,
+                 False)] if _be_g_gh else [])
 
-_SCALE0 = [o[1] for o in _USHCN_LINES] + ([_be_u] if _be_u else [])
+_SCALE0 = ([o[1] for o in _USHCN_LINES] + ([_be_u] if _be_u else [])
+           + ([_be_c_gh] if _be_c_gh else []))
+_SCALE1 = [_be_g_gh] if _be_g_gh else []
 
 # figure 1: USHCN rides in the GHCN panel
 _OVL_OVERLAY = {}
 if _USHCN_LINES: _OVL_OVERLAY[("GHCND", 0)] = _USHCN_LINES
 if _BE_LINES:    _OVL_OVERLAY[("Berkeley", 0)] = _BE_LINES
+if _BE_LINES_G:  _OVL_OVERLAY[("Berkeley", 1)] = _BE_LINES_G
 
 _out_F6 = build_figure(["Berkeley", "GHCND", "ERA5"], _OVL_OVERLAY,
-                       "FigHW_conus_vs_global_ushcn_overlay_wide.png", {0: _SCALE0})
+                       "Figure6.png", {0: _SCALE0, 1: _SCALE1})
 
 print(f"\nwrote {_out_F6}")

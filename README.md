@@ -16,10 +16,18 @@ whether station data are bias-corrected, and which stations are in the network.
 | `requirements.txt` | Python packages. |
 | `.gitignore` | Keeps data, caches and generated figures out of the repository. |
 
-Notebook or scripts, either produces the figures; the analysis code is identical, line
-for line. Use the notebook to read the analysis in order, the scripts to rebuild one
-figure. The scripts are what currently runs against the lab archive — the notebook still
-carries the original author's paths.
+Notebook or scripts, either produces the figures. Use the notebook to read the analysis
+in order, the scripts to rebuild one figure. The scripts are what currently runs against
+the lab archive — the notebook still carries the original author's paths.
+
+For Figures 2, 4 and 6 the analysis code is identical, line for line. **Figures 1, 3 and 5
+differ.** All three now draw the same smoother, which lives in `figures/common.py`: an
+11-year centered mean carried to both ends of the record by a local linear fit. Figure 1
+also moves from an even 10-year window, which pandas centered asymmetrically, to that
+odd 11-year one. `figures/figure3.py` additionally gained Berkeley read at the USHCN
+sites, a sampling correction applied to USHCN-BC, and a second panel layout. The
+notebook's sections were deliberately left as they were, so they still draw the original
+figures. `figures/README.md` lists the differences.
 
 Figure S1 of the paper is not in the notebook and has no script here.
 
@@ -118,7 +126,7 @@ the staged copies afterwards.
 | --- | --- | --- | --- |
 | `figure1.py` | 5 | Figure 1 | CONUS JJA anomalies, TMAX / TMIN / TAVG, eight datasets, 1900-2024 |
 | `figure2.py` | 6 | Figure 2 | Seasonal bars, DJF-SON by element, Dust Bowl vs. modern |
-| `figure3.py` | 7 | Figure 3 | CONUS daily TMAX record frequency, May-September |
+| `figure3.py` | 7 | Figure 3 | CONUS daily TMAX record frequency, May-September — two layouts; the one script that has diverged from the notebook |
 | `figure4.py` | 8 | Figure 4 | Berkeley Earth exceedance maps, p95 from the full record |
 | `figure5.py` | 9 | Figure 5 | Northern mid-latitude band, 24-50N, JJA |
 | `figure6.py` | 10 | Figure 6 | Heat-wave days, CONUS vs. the global strip, Christy (2026) method |
@@ -135,8 +143,12 @@ month; that a field equal to its own climatology gives exactly zero; that a stat
 sitting on a grid point is reproduced exactly by the interpolation; that a station
 without enough baseline years is dropped; that ties in the record count are split rather
 than awarded to the earliest year; that each record series integrates to exactly 153
-May-September days; and that a five-day hot spell is not counted as a heat wave while a
-six-day one is.
+May-September days; that the shared endpoint-aware smoother reproduces the plain centered
+mean everywhere inside the record, so that only the outermost years are ever new; and that
+a five-day hot spell is not counted as a heat wave while a six-day one is.
+
+Figure 3's sampling-corrected line is a product rather than a record count, so it is the
+one series in that figure's table not held to the 153-day integral.
 
 Figure 1's check is also an end-to-end validation: it prints the homogenization signal
 (USHCN-BC minus USHCN-Daily) against the published run, and the current build reproduces
@@ -160,6 +172,16 @@ neighbours, 150 km cutoff), except where a figure counts at stations on purpose.
 cell, the year holding the highest TMAX of 1900-2024 gets that day, and years sharing the
 highest value split it equally. A location must have data in at least 100 of 125 years
 and 80% of possible days.
+
+**Station sampling is separated from climate** (Figure 3) by reading Berkeley Earth twice:
+once on the full CONUS grid, once at a network's station sites, one unit per station so
+the line carries the network's density rather than merely its outline. Their ratio is what
+the footprint alone does to a record count, with the climate held fixed — 0.795 in the
+1930s against 1.293 over 2015-24 — and USHCN-BC multiplied through by it estimates what
+USHCN-BC would have reported with full coverage. Its Dust Bowl-to-present ratio falls from
+2.05 to 1.24 that way, against Berkeley's own 1.13. The GHCN and USHCN footprints agree
+to within 0.08 records/yr while either differs from the full grid by up to 0.66: it is not
+which network, it is stations against full coverage.
 
 **Heat waves** (Figure 6) follow Christy (2026): runs of six or more days above a
 day-of-season 90th percentile computed over the full record in a +/-3 day window. A

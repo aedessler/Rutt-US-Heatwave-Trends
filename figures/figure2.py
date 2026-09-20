@@ -387,8 +387,7 @@ fig_F2.text(0.5, 0.972,
            f"{FIXED_MODERN_START_F2}-{FIXED_MODERN_END_F2} vs. {YEAR_1936_F2} vs. {YEAR_2024_F2}",
            ha="center", va="bottom", fontsize=FS_MAIN_F2, fontweight="bold")
 
-_out_F2 = (FIGD
-          / f"FigH_v16_seasonal_conus_2x2_anomaly_first_plus_BE_at_{BE_NETWORK_F2}_sites_labelfix.png")
+_out_F2 = FIGD / "Figure2.png"
 _out_F2.parent.mkdir(exist_ok=True)
 fig_F2.savefig(_out_F2, dpi=300, bbox_inches="tight", facecolor="white")
 plt.show()

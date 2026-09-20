@@ -245,8 +245,7 @@ fig.suptitle(
     fontsize=12, fontweight='bold', fontfamily='serif', y=0.99,
 )
 
-out = FIGD / (f'Fig_spatial_BE_dustbowl_vs_modern_JJA_grey5pct_'
-                 f'{_MOD_YRS[0]}_{_MOD_YRS[-1]}_fixeddiff_FULLRECORDp95.png')
+out = FIGD / 'Figure4.png'
 fig.savefig(out, bbox_inches='tight', dpi=150)
 plt.show()
 plt.close()

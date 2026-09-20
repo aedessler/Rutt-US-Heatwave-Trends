@@ -767,6 +767,257 @@ def ghcnd_daily_cube():
     return IDS, V, POS
 
 
+# ── the same cube, for the 24-50N band at every longitude ────────────────────
+# Figure 6's bottom row counts heat waves AT STATIONS and grids the counts, the
+# way Christy (2026) does, so it needs the band as stations rather than as the
+# 2 deg field of daily temperatures prepare_data.py builds. Same archive, same
+# QC, same calendar as ghcnd_daily_cube -- only the domain and the screen differ.
+BAND_COV_FP = CACHE_REC / "global" / f"ghcnd_band_coverage_mjjas_{TAG_F3}.parquet"
+_BAND_CUBE  = CACHE_REC / "global" / "ghcnd_band_mjjas"     # + _{screen}.npy
+
+def ghcnd_band_cube(min_total_days=0, min_good_years=0, min_days_in_year=0):
+    """(IDS, V, POS) for the 24-50N band: V is (19125, n_stn) float32 of MJJAS
+    TMAX in degC, POS a lat/lon frame indexed by station id.
+
+    The screen is the caller's, because what may be discarded depends on the
+    caller's threshold rule, not on anything intrinsic to the data:
+      min_total_days   finite MJJAS days a station needs over the whole record
+      min_days_in_year  days a year needs to count as "good"
+      min_good_years   how many such years a station needs
+
+    Positions come from the parquets rather than from ghcnd-inventory.txt, which
+    the archive only carries for the CONUS.
+
+    The cube is written uncompressed so np.load(mmap_mode="r") stays available:
+    the band is an order of magnitude more stations than the CONUS, and callers
+    that only ever touch a station block at a time should not have to hold it
+    all. Budget about 1.5 GB."""
+    (CACHE_REC / "global").mkdir(parents=True, exist_ok=True)
+    yrs = [y for y in range(Y0_F3, Y1_F3 + 1)
+           if (GHCND_GLOBAL / f"ghcn_global_{y}.parquet").exists()]
+    assert yrs, f"no band parquets under {GHCND_GLOBAL} -- run prepare_data.py"
+
+    qcols, first = [], True
+    def read_year(y, keep=None):
+        nonlocal qcols, first
+        fp = GHCND_GLOBAL / f"ghcn_global_{y}.parquet"
+        if first:
+            avail = set(pd.read_parquet(fp).head(0).columns)
+            qcols = [c for c in ("qflag", "q_flag", "tmax_qflag", "quality_flag")
+                     if c in avail]
+            first = False
+        d = pd.read_parquet(fp, columns=["station_id", "date", "tmax_c",
+                                         "lat", "lon"] + qcols)
+        d = d[d["tmax_c"].notna()]
+        if keep is not None:
+            d = d[d["station_id"].isin(keep)]
+        if d.empty:
+            return d
+        for c in qcols:
+            d = d[d[c].fillna("").astype(str).str.strip() == ""]
+        d = d[d["tmax_c"].between(*TMAX_BOUNDS_F3)]
+        dt = pd.DatetimeIndex(d["date"])
+        d = d[np.isin(dt.month, MONTHS)]
+        if d.empty:
+            return d
+        return d.drop_duplicates(subset=["station_id", "date"], keep="first")
+
+    pos_fp = CACHE_REC / "global" / "ghcnd_band_positions.parquet"
+    if BAND_COV_FP.exists() and pos_fp.exists() and not FORCE_F3:
+        cov = pd.read_parquet(BAND_COV_FP)
+        POS = pd.read_parquet(pos_fp)
+    else:
+        per_year, pos = {}, []
+        for y in yrs:
+            d = read_year(y)
+            per_year[y] = (d.groupby("station_id").size().astype("int32")
+                           if not d.empty else pd.Series(dtype="int32"))
+            if not d.empty:
+                pos.append(d.groupby("station_id")[["lat", "lon"]].first())
+        cov = pd.DataFrame(per_year).fillna(0).astype("int32")
+        POS = pd.concat(pos).groupby(level=0).first()
+        cov.to_parquet(BAND_COV_FP); POS.to_parquet(pos_fp)
+
+    tot = cov.sum(axis=1)
+    good = (cov >= int(min_days_in_year)).sum(axis=1)
+    keep_ids = cov.index[(tot >= min_total_days) & (good >= max(min_good_years, 1))]
+    keep_ids = pd.Index(sorted(set(keep_ids) & set(POS.index)))
+
+    tag = f"t{int(min_total_days)}_g{int(min_good_years)}x{int(min_days_in_year)}"
+    cube_fp = Path(f"{_BAND_CUBE}_{TAG_F3}_{tag}.npy")
+    if cube_fp.exists() and not FORCE_F3:
+        V = np.load(cube_fp, allow_pickle=False)
+        IDS = np.asarray(keep_ids, dtype="<U11")
+        assert V.shape == (len(KEYS), len(IDS)), \
+            f"{cube_fp.name} is {V.shape}, the screen now wants " \
+            f"{(len(KEYS), len(IDS))} -- delete it"
+    else:
+        IDS = np.asarray(keep_ids, dtype="<U11")
+        IPOS = pd.Index(IDS); want = set(IDS.tolist())
+        V = np.full((len(KEYS), len(IDS)), np.nan, np.float32)
+        for y in yrs:                      # year-major: the parquets are too
+            d = read_year(y, keep=want)
+            if d.empty:
+                continue
+            dt = pd.DatetimeIndex(d["date"])
+            key = (dt.year * 10000 + dt.month * 100 + dt.day).to_numpy(np.int64)
+            r = KPOS.get_indexer(key); c = IPOS.get_indexer(d["station_id"].to_numpy())
+            g = (r >= 0) & (c >= 0)
+            V[r[g], c[g]] = d["tmax_c"].to_numpy(np.float32)[g]
+        np.save(cube_fp, V)
+    return IDS, V, POS.reindex(pd.Index(IDS))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# THE SMOOTHER -- shared by Figures 1, 3 and 5.
+#
+# A centered ROLL-year mean. The window runs off the record in the last and
+# first ROLL//2 years, and END_METHOD decides what happens there. Every option
+# below leaves the interior bit-for-bit identical to the plain centered mean --
+# only the ends differ -- and each is a different answer to the same
+# bias/variance question, because a one-sided window must either lag a trending
+# series or pay variance to extrapolate it.
+#
+#   none      stop ROLL//2 years short (the original behaviour)
+#   mean      average whatever the window catches. Lowest variance, but it
+#             reports the mean of the last six years at the position of the
+#             last one, so it sits ~2.5 yr behind and DAMPS a rising tail.
+#   loclin    least-squares line through the same six-plus years, read at the
+#             endpoint. Unbiased under a local trend, ~2.4x the interior's
+#             standard error. Inside the record it IS the window mean, because
+#             the line through a symmetric window read at its own centre is
+#             that window's average.
+#   savgol    as loclin, but the line is fit to the full ROLL-year window rather
+#             than the shrinking one: less variance, more lag.
+#   minrough  Mann (2004) -- pad the series past the end with the reflection
+#             (flat, mirrored, or mirrored-through-the-endpoint) that leaves the
+#             smoothed tail smoothest, then take the ordinary centered mean.
+#
+# Out-of-sample on Figure 3's five series -- truncate at year T, compare each
+# rule's estimate at T against the centered mean the boxcar eventually reports
+# there -- `mean` wins overall (RMSE 0.35 vs 0.69 for loclin) because most of the
+# record is not trending, but that reverses exactly where it matters: over the 22
+# episodes rising faster than +0.15 records/yr, which is the regime every one of
+# those series is in after 2015, loclin scores 0.39 against 0.57 and carries a
+# bias of -0.11 where `mean` under-reports the rise by -0.54.
+#
+# STRICT_INTERIOR is the one knob that is not about the ends. The loclin and
+# savgol branches fit a line to whatever finite points the window holds, so with
+# a gappy series they quietly BRIDGE interior gaps that a min_periods=ROLL mean
+# would blank. On a gap-free series the two agree exactly. Figures 1 and 5 pass
+# strict_interior=True, which restores the plain full-window rule everywhere
+# except the outer ROLL//2 positions: ERA5's smooth then still starts five years
+# after 1940, and Figure 5's MAD-blanked years still leave holes, rather than
+# having a six-point line drawn through them. Figure 3's series are gap-free, so
+# it keeps the default and its curves are unchanged either way.
+# ══════════════════════════════════════════════════════════════════════════════
+ROLL       = 11
+END_METHOD = "loclin"            # how the smooth handles the last/first ROLL//2
+                                 # years: loclin | mean | savgol | minrough | none
+END_SHADE  = False               # shade those reduced-window years
+END_BAND   = False               # ... and draw their out-of-sample uncertainty
+END_BAND_K = 1.0                 # envelope half-width, in units of that RMSE
+                                 # Both are off: the panels carry the smoothed
+                                 # line alone. end_uncertainty() still runs and
+                                 # its RMSE is still printed, so the size of the
+                                 # end-year error is reported rather than drawn.
+HALF, MIN_WIN = ROLL // 2, ROLL // 2 + 1
+
+
+def roll(s, strict_interior=False, end_method=None):
+    """No smoothed value where the series itself has none: `savgol` and
+    `minrough` would otherwise happily draw a blanked year out of the
+    surrounding ones, and a deliberately blanked year must stay blank.
+
+    end_method overrides END_METHOD for one call. The caller that needs it is
+    Figure 5's uncertainty band: a band's WIDTH is a slowly varying, non-trending
+    quantity, so the low-variance `mean` rule suits it, while the curve it wraps
+    is trending and wants `loclin`."""
+    return _roll(s, strict_interior=strict_interior,
+                 end_method=end_method).where(np.isfinite(s.values))
+
+
+def _roll(s, strict_interior=False, end_method=None):
+    end_method = END_METHOD if end_method is None else end_method
+    x, y = s.index.values.astype(float), s.values.astype(float)
+    box = s.rolling(ROLL, center=True, min_periods=ROLL).mean()
+    if end_method == "none":
+        return box
+    if end_method in ("loclin", "savgol"):
+        out = box.values.copy() if strict_interior else np.full(y.size, np.nan)
+        for i in range(y.size):
+            if strict_interior and HALF <= i < y.size - HALF:
+                continue                                    # the plain mean stands
+            k = (slice(max(0, i - HALF), i + HALF + 1) if end_method == "loclin" else
+                 slice(min(max(0, i - HALF), max(0, y.size - ROLL)),
+                       max(i + HALF + 1, min(ROLL, y.size))))
+            xx, yy = x[k] - x[i], y[k]
+            g = np.isfinite(yy)
+            out[i] = np.polyfit(xx[g], yy[g], 1)[1] if g.sum() >= MIN_WIN else np.nan
+        return pd.Series(out, index=s.index)
+    if end_method == "mean":
+        return s.rolling(ROLL, center=True, min_periods=MIN_WIN).mean()
+    if end_method == "minrough":
+        def _pad(v, side):
+            t = v[-(HALF + 1):] if side > 0 else v[:HALF + 1][::-1]
+            t = t[np.isfinite(t)]
+            if t.size < 2:
+                return {k: np.full(HALF, np.nan) for k in ("flat", "even", "odd")}
+            return {"flat": np.repeat(t[-1], HALF),
+                    "even": t[-2::-1][:HALF],
+                    "odd":  2 * t[-1] - t[-2::-1][:HALF]}
+        best, bs = None, np.inf
+        for kind in ("flat", "even", "odd"):
+            lo, hi = _pad(y, -1)[kind][::-1], _pad(y, +1)[kind]
+            z = pd.Series(np.concatenate([lo, y, hi])).rolling(
+                ROLL, center=True, min_periods=MIN_WIN).mean().values[HALF:HALF + y.size]
+            r = np.nansum(np.diff(z[:ROLL], 2) ** 2) + np.nansum(np.diff(z[-ROLL:], 2) ** 2)
+            if r < bs:
+                best, bs = z, r
+        return pd.Series(best, index=s.index)
+    raise ValueError(f"end_method={end_method!r}")
+
+
+def end_uncertainty(s, n_min=None, strict_interior=False, end_method=None):
+    """How wrong the reduced-window years are, measured on this series rather
+    than asserted. Truncate at each year T, smooth the truncated record, and
+    compare its estimate at T, T-1 ... against the centered mean the FULL record
+    eventually reports there. Returns RMSE by distance from the endpoint -- the
+    envelope a figure can draw, and a number a caption can quote.
+
+    dropna() first, so a series with interior gaps is measured on its finite
+    values as though they were contiguous. That is fine for a gap-free series
+    and approximate for a gappy one; the figures that carry gaps do not draw
+    this band."""
+    n_min = 3 * ROLL if n_min is None else n_min
+    y = s.dropna().values.astype(float)
+    truth = pd.Series(y).rolling(ROLL, center=True, min_periods=ROLL).mean().values
+    err = {lag: [] for lag in range(HALF + 1)}
+    for T in range(n_min, len(y) - HALF):
+        est = _roll(pd.Series(y[:T + 1], index=np.arange(T + 1, dtype=float)),
+                    strict_interior=strict_interior, end_method=end_method).values
+        for lag in range(HALF + 1):
+            i = T - lag
+            if np.isfinite(truth[i]) and np.isfinite(est[i]):
+                err[lag].append(est[i] - truth[i])
+    return np.array([np.sqrt(np.mean(np.square(err[l]))) if err[l] else np.nan
+                     for l in range(HALF + 1)])
+
+
+def end_band(ax, sm, unc, color, alpha=0.13):
+    """Shade +/- END_BAND_K * the out-of-sample RMSE over the reduced-window
+    years at each end of a smoothed curve."""
+    yy = sm.dropna()
+    if yy.empty:
+        return
+    for sgn in (+1, -1):                            # the tail, then the head
+        y0 = yy.index[-1] if sgn > 0 else yy.index[0]
+        ix = [y0 - sgn * l for l in range(HALF + 1)][::sgn]
+        w = np.array([unc[abs(y0 - i)] for i in ix]) * END_BAND_K
+        v = sm.reindex(ix).values
+        ax.fill_between(ix, v - w, v + w, color=color, alpha=alpha, lw=0, zorder=2)
+
+
 __all__ = [
     # modules and objects the figure scripts use directly
     "os", "re", "calendar", "warnings", "pickle", "Path", "lru_cache",
@@ -801,6 +1052,10 @@ __all__ = [
     "TMAX_BOUNDS_F3", "FORCE_F3", "TAG_F3", "COV_FP", "DAILY_FP",
     "KEYS", "KPOS", "YR", "MO", "DY",
     "coverage", "complete", "ghcnd_conus_positions", "ghcnd_daily_cube",
+    "ghcnd_band_cube", "BAND_COV_FP",
+    # the smoother shared by Figures 1, 3 and 5
+    "ROLL", "END_METHOD", "END_SHADE", "END_BAND", "END_BAND_K", "HALF", "MIN_WIN",
+    "roll", "_roll", "end_uncertainty", "end_band",
     # checks
     "check_paths", "check_geometry", "check_pipeline", "check_gridded",
 ]

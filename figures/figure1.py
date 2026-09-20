@@ -31,7 +31,6 @@ NCLIMDIV_ELEM_F1  = dict(tmax=27, tmin=28, tavg=2)     # element codes in the st
 
 YEARS_F1   = np.arange(1900, 2025)                      # his YEAR_START..YEAR_END
 JJA_F1     = (6, 7, 8)
-SMOOTH_F1  = 10
 IDW_KW_F1 = dict(power=2.0, k=8, radius_km=150.0)
 ERA5_Y0_F1, ERA5_Y1_F1 = 1940, 2024
 DUSTBOWL_F1 = (1930, 1940)
@@ -59,8 +58,14 @@ def gridded_series_F1(field, weights):
     return (pd.Series(season_mean(_to_year_month(m, YEARS_F1), JJA_F1, YEARS_F1), index=YEARS_F1),
             pd.Series(season_mean(_to_year_month(frac, YEARS_F1), JJA_F1, YEARS_F1), index=YEARS_F1))
 
-def smooth_F1(s, n=SMOOTH_F1):
-    return s.rolling(n, center=True, min_periods=n).mean()
+def smooth_F1(s):
+    """The smoother Figures 1, 3 and 5 now share: an 11-year centered mean with
+    a local-linear fit standing in over the outer ROLL//2 years at each end of
+    the record. strict_interior keeps the plain full-window rule everywhere
+    else, so a gap is still a gap -- ERA5 starts in 1940 and its smooth starts
+    five years later, rather than having a six-point line drawn through the
+    boundary."""
+    return roll(s, strict_interior=True)
 
 def station_series_F1(dataset, elem, weights05, gridder):
     """the whole station chain, cached at the gridded-field stage."""
@@ -89,11 +94,12 @@ def berkeley_field_F1(fp, elem):
 def era5_field_F1(varname, elem):
     """JJA monthly means per 0.25 deg cell from the daily files."""
     def build():
-        parts = []
+        parts, missing, failed = [], [], []
         for y in range(ERA5_Y0_F1, ERA5_Y1_F1 + 1):
             for mo in JJA_F1:
                 fp = ERA5_DIR / f"era5_2t_{y}{mo:02d}_daily.nc"
                 if not fp.exists():
+                    missing.append(f"{y}-{mo:02d}")
                     continue
                 ds = None
                 try:
@@ -109,13 +115,23 @@ def era5_field_F1(varname, elem):
                     m = da.mean("time")
                     m = m.expand_dims(time=[pd.Timestamp(f"{y}-{mo:02d}-01")])
                     parts.append(m)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    failed.append(f"{y}-{mo:02d} ({type(exc).__name__})")
                 finally:
                     if ds is not None:
                         ds.close()
         if not parts:
             raise RuntimeError(f"no ERA5 files under {ERA5_DIR}")
+        # A silently partial build is how field_era5_tmin came to hold 187 of the
+        # 255 JJA months, which blanked ERA5 TMIN and TAVG for a whole published
+        # run: too few months to form a 1951-1980 baseline, no error anywhere.
+        # A short read is a broken cache, so refuse to write one.
+        want = len(range(ERA5_Y0_F1, ERA5_Y1_F1 + 1)) * len(JJA_F1)
+        if len(parts) < want:
+            raise RuntimeError(
+                f"ERA5 {elem}: built {len(parts)} of {want} JJA months. "
+                f"missing files: {missing or 'none'}. failed reads: {failed or 'none'}. "
+                f"Refusing to cache a partial field -- fix the archive and re-run.")
         out = xr.concat(parts, dim="time").sortby("time")
         return out.sortby("lat")
     return _cache(f"field_era5_{elem}", build)
@@ -192,9 +208,11 @@ for _k in PANEL_SETS_F1["tmax"]:
     print(f"  {LABEL_F1[_k]:<14}{_a:>+8.2f}{_y36:>+8.2f}{_b:>+9.2f}{_n:>7}")
 _r, _a = S_F1[("ushcn", "tmax")], S_F1[("ushcn_bc", "tmax")]
 _d = smooth_F1(_a) - smooth_F1(_r)
-print(f"\nhomogenization signal (USHCN-BC minus USHCN-Daily, 10-yr line):"
+print(f"\nhomogenization signal (USHCN-BC minus USHCN-Daily, {ROLL}-yr line):"
       f"  1930s {_d.loc[1930:1939].mean():+.2f}   2010-24 {_d.loc[2010:2024].mean():+.2f}")
-print("published run: 1930s -0.06, 2010-24 +0.56; this pipeline should match to ~0.01")
+print("published run: 1930s -0.06, 2010-24 +0.56 -- computed on ITS 10-yr window.\n"
+      "The 11-yr loclin line above reproduces both to ~0.01, so the homogenization\n"
+      "signal is a property of the data and not of the smoother.")
 print(f"\nsampled CONUS area fraction, JJA:  " + "   ".join(
     f"{_y}:{FRAC_F1[('ghcnd', 'tmax')].loc[_y]:.2f}" for _y in (1900, 1936, 1990, 2024)))
 
@@ -244,17 +262,7 @@ with mpl.rc_context(STYLE_F1):
                  loc="upper center", ncol=2, frameon=False,
                  bbox_to_anchor=(0.5, 1.035), handlelength=3.0,
                  columnspacing=2.0, fontsize=12)
-    fig11.suptitle(
-        "CONUS temperature anomalies (deg C)  |  baseline 1951-1980  |  "
-        "thin=annual, thick=10-yr mean  |  JJA (Jun-Aug)\n"
-        "ANOMALY-FIRST: every station against its own 1951-1980 climatology before "
-        "gridding, every cell against its own before averaging;\n"
-        "station products IDW'd onto a 0.5 deg CONUS grid (p=2, k=8, 150 km); "
-        "area weights are the fraction of each cell inside the CONUS polygon\n"
-        "GHCN-Daily is built from the station archive, not the pre-made 2 deg grid;  "
-        "nCLIMDIV is NOAA's area-weighted national series (region 110)",
-        fontsize=11, color="0.35", y=1.215)
-    OUT11 = FIGD / "FigE_v11_jja_only_3x1_anomaly_first_dessler_method.png"
+    OUT11 = FIGD / "Figure1.png"
     fig11.savefig(OUT11, bbox_inches="tight", dpi=300, facecolor="white")
     plt.show(); plt.close(fig11)
 

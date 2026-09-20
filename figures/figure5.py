@@ -30,7 +30,8 @@ MIN_BASE_YRS  = 15                  # of 30, per station and per cell
 TMAX_BOUNDS_F5   = (-60.0, 60.0)
 N_DRAWS       = 20                  # random co-sample realizations per year
 RNG_SEED      = 42
-SMOOTH        = 11                  # ODD, so the centred window is symmetric
+                                    # the window is common.py's ROLL = 11: ODD, so
+                                    # the centred window is symmetric
 TRIM_TERMINAL = False               # see note 7; reports either way
 MAD_K         = 8.0
 DUSTBOWL      = (1930, 1940)
@@ -293,7 +294,14 @@ SF["be_ta"] = 0.5 * (SF["be_tx"] + SF["be_tn"])
 for k in ("gh_ta", "be_ta"):
     SPR[k] = 0.5 * (SPR[k.replace("_ta", "_tx")] + SPR[k.replace("_ta", "_tn")])
 
-smooth = lambda s: s.rolling(SMOOTH, center=True, min_periods=SMOOTH).mean()
+def smooth(s):
+    """The smoother Figures 1, 3 and 5 now share: an 11-year centered mean with
+    a local-linear fit standing in over the outer ROLL//2 years at each end of
+    the record, so the curves reach 2024 instead of stopping in 2019.
+    strict_interior keeps the plain full-window rule inside the record, so the
+    years finish() blanks as MAD outliers still leave holes rather than having a
+    six-point line drawn through them."""
+    return roll(s, strict_interior=True)
 
 # ══ CHECK -- Figure 5 series, before plotting. JJA anomaly on the band. ════
 print(f"{'series':<28}{'1930s':>8}{'2010-24':>9}{'trend/century':>15}{'years':>7}")
@@ -305,6 +313,11 @@ for _lbl, _k in (("GHCN-Daily TMAX", "gh_tx"), ("GHCN-Daily TMIN", "gh_tn"),
           f"{_tr:>+15.2f}{len(_s):>7}")
 print(f"\nequal-region sampling: {N_DRAWS} draws, spread (1 s.d. across draws) "
       f"{float(np.nanmean(np.nanstd(res['gh_tx'], axis=0))):.3f} degC")
+# the panels no longer shade this, so it is reported rather than drawn
+print(f"{'series':<28}{'2.5-97.5 spread across draws, degC':>38}")
+for _k in ("gh_tx", "be_tx", "gh_tn", "be_tn", "gh_ta", "be_ta"):
+    _w = (SPR[_k].quantile(0.975) - SPR[_k].quantile(0.025))
+    print(f"  {_k:<26}{f'mean {_w.mean():.4f}   max {_w.max():.4f}':>38}")
 
 # ══ PLOT — smoothed curves only, scaled to what is actually drawn ══════════
 PANELS = [("(a) TMAX: JJA", "gh_tx", "be_tx"),
@@ -313,11 +326,10 @@ PANELS = [("(a) TMAX: JJA", "gh_tx", "be_tx"),
 
 # precompute everything that will appear on the axes, and scale to THAT
 SM   = {k: smooth(S[k]) for _, a, b in PANELS for k in (a, b)}
-BAND = {k: (smooth(SPR[k].quantile(0.025)), smooth(SPR[k].quantile(0.975)))
-        for _, a, b in PANELS for k in (a, b)}
-_drawn = np.concatenate(
-    [v.to_numpy(float) for v in SM.values()]
-    + [x.to_numpy(float) for lo_hi in BAND.values() for x in lo_hi])
+# The panels carry the smoothed curve alone. The 2.5/97.5 spread across the
+# N_DRAWS co-samples is still computed and reported in the diagnostic above; it
+# is simply not shaded, so nothing on the axes competes with the curve.
+_drawn = np.concatenate([v.to_numpy(float) for v in SM.values()])
 _drawn = _drawn[np.isfinite(_drawn)]
 _pad = YPAD_FRAC * (np.nanmax(_drawn) - np.nanmin(_drawn))
 _lo, _hi = np.nanmin(_drawn) - _pad, np.nanmax(_drawn) + _pad
@@ -326,9 +338,6 @@ fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True, constrained_layout
 for ax, (title, kg, kb) in zip(axes, PANELS):
     ax.axvspan(*DUSTBOWL, color="#caa472", alpha=0.18, lw=0, zorder=0)
     for lbl, k, col in (("GHCN-Daily", kg, COL_GH_F5), ("Berkeley Earth", kb, COL_BE_F5)):
-        lo, hi = BAND[k]
-        ax.fill_between(YEARS_F5, lo.values, hi.values, color=col, alpha=0.16, lw=0,
-                        zorder=1)               # spread across the random draws
         if SHOW_ANNUAL_F5:
             ax.plot(YEARS_F5, S[k].values, color=col, lw=0.9, alpha=0.28, zorder=2)
         ax.plot(YEARS_F5, SM[k].values, color=col, lw=2.4, label=lbl, zorder=3)
@@ -349,13 +358,9 @@ for ax in axes:
             h.append(hh); l.append(ll); seen.add(ll)
 fig.legend(h, l, loc="upper center", ncol=2, frameon=False,
            bbox_to_anchor=(0.5, 1.06), handlelength=2.4, columnspacing=2, fontsize=20)
-fig.suptitle("Northern Mid-latitude Band Temperature Anomalies (°C)",
-             fontsize=30, fontweight="bold", color="black", y=1.10)
-OUT_F5 = FIGD / f"FigG_v9b_band_jja_smoothed_{TAG_F5}.png"
+OUT_F5 = FIGD / "Figure5.png"
 fig.savefig(OUT_F5, bbox_inches="tight", dpi=300, facecolor="white")
-fig.savefig(OUT_F5.with_suffix(".pdf"), bbox_inches="tight", facecolor="white")
 plt.show()
 plt.close(fig)
 
 print(f"\nwrote {OUT_F5}")
-print(f"wrote {OUT_F5.with_suffix('.pdf')}")

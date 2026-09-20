@@ -28,12 +28,6 @@ for _d in (FIGD, CACHE_REC): _d.mkdir(parents=True, exist_ok=True)
 # common.py, because Figure 6 needs the same cube and the same tag.
 MIN_CELL_FRAC = 0.50             # a Berkeley cell must be >=50% inside CONUS
 BE_LAND_MIN   = 0.50             # ... and >50% land in Berkeley's own mask
-ROLL = 11
-END_METHOD = "loclin"            # how the smooth handles the last/first ROLL//2
-                                 # years: loclin | mean | savgol | minrough | none
-END_SHADE  = True                # shade those reduced-window years
-END_BAND   = True                # ... and draw their out-of-sample uncertainty
-END_BAND_K = 1.0                 # envelope half-width, in units of that RMSE
 BLANK_PARTIAL = True             # Berkeley's daily release stops 2024-08-31
 SERIES_FP = CACHE_REC / f"fig3_all_series_{TAG_F3}_cf{MIN_CELL_FRAC:g}.csv"
 
@@ -233,98 +227,10 @@ if BLANK_PARTIAL and PARTIAL:
         _s.loc[[y for y in PARTIAL if y in _s.index]] = np.nan
 
 # ══ THE SMOOTHER ══════════════════════════════════════════════════════════════
-# A centered ROLL-year mean. The window runs off the record in the last and
-# first ROLL//2 years, and END_METHOD decides what happens there. Every option
-# below leaves 1905-2019 bit-for-bit identical to the plain centered mean -- only
-# the ends differ -- and each is a different answer to the same bias/variance
-# question, because a one-sided window must either lag a trending series or pay
-# variance to extrapolate it.
-#
-#   none      stop ROLL//2 years short (the original behaviour)
-#   mean      average whatever the window catches. Lowest variance, but it
-#             reports the mean of the last six years at the position of the
-#             last one, so it sits ~2.5 yr behind and DAMPS a rising tail.
-#   loclin    least-squares line through the same six-plus years, read at the
-#             endpoint. Unbiased under a local trend, ~2.4x the interior's
-#             standard error. Inside the record it IS the window mean, because
-#             the line through a symmetric window read at its own centre is
-#             that window's average.
-#   savgol    as loclin, but the line is fit to the full ROLL-year window rather
-#             than the shrinking one: less variance, more lag.
-#   minrough  Mann (2004) -- pad the series past the end with the reflection
-#             (flat, mirrored, or mirrored-through-the-endpoint) that leaves the
-#             smoothed tail smoothest, then take the ordinary centered mean.
-#
-# Out-of-sample on these five series -- truncate at year T, compare each rule's
-# estimate at T against the centered mean the boxcar eventually reports there --
-# `mean` wins overall (RMSE 0.35 vs 0.69 for loclin) because most of the record
-# is not trending, but that reverses exactly where it matters: over the 22
-# episodes rising faster than +0.15 records/yr, which is the regime every one of
-# these series is in after 2015, loclin scores 0.39 against 0.57 and carries a
-# bias of -0.11 where `mean` under-reports the rise by -0.54.
-HALF, MIN_WIN = ROLL // 2, ROLL // 2 + 1
-
-def roll(s):
-    """No smoothed value where the series itself has none: `savgol` and
-    `minrough` would otherwise happily draw Berkeley's blanked 2024 out of the
-    surrounding years, and a deliberately blanked year must stay blank."""
-    return _roll(s).where(np.isfinite(s.values))
-
-def _roll(s):
-    x, y = s.index.values.astype(float), s.values.astype(float)
-    box = s.rolling(ROLL, center=True, min_periods=ROLL).mean()
-    if END_METHOD == "none":
-        return box
-    if END_METHOD in ("loclin", "savgol"):
-        out = np.full(y.size, np.nan)
-        for i in range(y.size):
-            k = (slice(max(0, i - HALF), i + HALF + 1) if END_METHOD == "loclin" else
-                 slice(min(max(0, i - HALF), max(0, y.size - ROLL)),
-                       max(i + HALF + 1, min(ROLL, y.size))))
-            xx, yy = x[k] - x[i], y[k]
-            g = np.isfinite(yy)
-            if g.sum() >= MIN_WIN:
-                out[i] = np.polyfit(xx[g], yy[g], 1)[1]     # the line, read at x[i]
-        return pd.Series(out, index=s.index)
-    if END_METHOD == "mean":
-        return s.rolling(ROLL, center=True, min_periods=MIN_WIN).mean()
-    if END_METHOD == "minrough":
-        def _pad(v, side):
-            t = v[-(HALF + 1):] if side > 0 else v[:HALF + 1][::-1]
-            t = t[np.isfinite(t)]
-            if t.size < 2:
-                return {k: np.full(HALF, np.nan) for k in ("flat", "even", "odd")}
-            return {"flat": np.repeat(t[-1], HALF),
-                    "even": t[-2::-1][:HALF],
-                    "odd":  2 * t[-1] - t[-2::-1][:HALF]}
-        best, bs = None, np.inf
-        for kind in ("flat", "even", "odd"):
-            lo, hi = _pad(y, -1)[kind][::-1], _pad(y, +1)[kind]
-            z = pd.Series(np.concatenate([lo, y, hi])).rolling(
-                ROLL, center=True, min_periods=MIN_WIN).mean().values[HALF:HALF + y.size]
-            r = np.nansum(np.diff(z[:ROLL], 2) ** 2) + np.nansum(np.diff(z[-ROLL:], 2) ** 2)
-            if r < bs:
-                best, bs = z, r
-        return pd.Series(best, index=s.index)
-    raise ValueError(f"END_METHOD={END_METHOD!r}")
-
-def end_uncertainty(s, n_min=3 * ROLL):
-    """How wrong the reduced-window years are, measured on this series rather
-    than asserted. Truncate at each year T, smooth the truncated record, and
-    compare its estimate at T, T-1 ... against the centered mean the FULL record
-    eventually reports there. Returns RMSE by distance from the endpoint -- the
-    envelope the figure draws, and a number a caption can quote."""
-    y = s.dropna().values.astype(float)
-    truth = pd.Series(y).rolling(ROLL, center=True, min_periods=ROLL).mean().values
-    err = {lag: [] for lag in range(HALF + 1)}
-    for T in range(n_min, len(y) - HALF):
-        est = _roll(pd.Series(y[:T + 1], index=np.arange(T + 1, dtype=float))).values
-        for lag in range(HALF + 1):
-            i = T - lag
-            if np.isfinite(truth[i]) and np.isfinite(est[i]):
-                err[lag].append(est[i] - truth[i])
-    return np.array([np.sqrt(np.mean(np.square(err[l]))) if err[l] else np.nan
-                     for l in range(HALF + 1)])
+# roll(), end_uncertainty() and end_band(), with ROLL / END_METHOD / END_SHADE /
+# END_BAND / END_BAND_K / HALF / MIN_WIN, now live in common.py so Figures 1 and
+# 5 draw the same 11-year loclin smooth. Nothing here changed: this figure keeps
+# the default strict_interior=False, and its series are gap-free anyway.
 
 # ══ CHECK -- the smoother. Inside the record it must reproduce the plain
 # centered mean to machine precision; only the ends are new. ══
@@ -336,19 +242,6 @@ assert np.nanmax(np.abs(roll(_c9) - _r9)) < 1e-12, (
 _new9 = int(np.isfinite(roll(_c9)).sum() - np.isfinite(_r9).sum())
 print(f"roll(): END_METHOD={END_METHOD!r} -- interior identical to the centered "
       f"{ROLL}-year mean, {_new9} reduced-window years added\n")
-
-def end_band(ax, sm, unc, color, alpha=0.13):
-    """Shade +/- END_BAND_K * the out-of-sample RMSE over the reduced-window
-    years at each end of a smoothed curve."""
-    yy = sm.dropna()
-    if yy.empty:
-        return
-    for sgn in (+1, -1):                            # the tail, then the head
-        y0 = yy.index[-1] if sgn > 0 else yy.index[0]
-        ix = [y0 - sgn * l for l in range(HALF + 1)][::sgn]
-        w = np.array([unc[abs(y0 - i)] for i in ix]) * END_BAND_K
-        v = sm.reindex(ix).values
-        ax.fill_between(ix, v - w, v + w, color=color, alpha=alpha, lw=0, zorder=2)
 
 # ══ THE SAMPLING CORRECTION ════════════════════════════════════════════════
 # Berkeley is the only dataset here that exists BOTH ways: on the full CONUS
@@ -402,6 +295,65 @@ print(f"\nthe USHCN sampling factor, Berkeley full grid / Berkeley at the USHCN 
       f"-{np.nanmax(be_samp_ratio):.3f}"
       f"\n  above 1 = the USHCN footprint under-counts records relative to full coverage")
 
+# ══ TRENDS -- the numbers the figure's paragraph quotes ════════════════════
+# OLS trend on the ANNUAL series, never the smoothed one: an 11-year mean
+# manufactures serial correlation and would make every trend look far more
+# significant than the data support.
+#
+# Record counts are strongly autocorrelated even unsmoothed -- a run of hot
+# summers sets records together, and the metric itself is path dependent, since
+# a record once set cannot be reset by a later year unless that year is hotter.
+# The ordinary OLS t-test assumes independent residuals and so overstates
+# significance here. The effective sample size below is the standard lag-1
+# correction of Santer et al. (2000), n_eff = n (1 - r1) / (1 + r1), applied to
+# the regression residuals. Both p-values are printed: quote the adjusted one.
+TREND_STARTS_F3 = (1900, 1920, 1940, 1955, 1960, 1970, 1980, 1990)
+
+def trend_F3(s, y0=Y0_F3, y1=Y1_F3):
+    """(trend per century, p_ols, p_ar1, n, r1) for the annual series."""
+    from scipy import stats
+    d = s.loc[y0:y1].dropna()
+    n = len(d)
+    if n < 10:
+        return np.nan, np.nan, np.nan, n, np.nan
+    x, y = d.index.values.astype(float), d.values.astype(float)
+    xm, ym = x.mean(), y.mean()
+    sxx = np.sum((x - xm) ** 2)
+    slope = np.sum((x - xm) * (y - ym)) / sxx
+    resid = y - (ym - slope * xm + slope * x)
+    se = np.sqrt(np.sum(resid ** 2) / ((n - 2) * sxx))
+    p_ols = float(2 * stats.t.sf(abs(slope / se), n - 2))
+    r1 = float(np.corrcoef(resid[:-1], resid[1:])[0, 1])
+    r1e = min(max(r1, 0.0), 0.99)        # only positive AR(1) inflates significance
+    n_eff = n * (1 - r1e) / (1 + r1e)
+    if n_eff > 2.5:
+        p_ar1 = float(2 * stats.t.sf(abs(slope / (se * np.sqrt((n - 2) / (n_eff - 2)))),
+                                     n_eff - 2))
+    else:
+        p_ar1 = 1.0
+    return slope * 100.0, p_ols, p_ar1, n, r1
+
+def _star(p):
+    return "*" if np.isfinite(p) and p < 0.05 else " "
+
+print(f"\ntrends in records per year per station or grid cell, PER CENTURY, "
+      f"{Y0_F3}-{Y1_F3}\n  * = p < 0.05 after the lag-1 correction")
+print(f"  {'dataset':<34}{'trend':>9}{'p(OLS)':>9}{'p(AR1)':>9}{'r1':>7}{'n':>5}")
+for _lbl, _s in SER.items():
+    _t, _po, _pa, _n, _r1 = trend_F3(_s)
+    print(f"  {_lbl:<34}{_t:>+8.2f}{_star(_pa)}{_po:>9.3f}{_pa:>9.3f}{_r1:>7.2f}{_n:>5}")
+
+print(f"\ntrend per century by start year, all ending {Y1_F3} "
+      f"(* = p < 0.05, lag-1 corrected)")
+print(f"  {'dataset':<34}" + "".join(f"{y:>9}" for y in TREND_STARTS_F3))
+for _lbl, _s in SER.items():
+    _cells = []
+    for _y0 in TREND_STARTS_F3:
+        _t, _po, _pa, _n, _r1 = trend_F3(_s, _y0)
+        _cells.append("       --" if not np.isfinite(_t)
+                      else f"{_t:>+8.2f}{_star(_pa)}")
+    print(f"  {_lbl:<34}" + "".join(_cells))
+
 # ══ PLOT ═══════════════════════════════════════════════════════════════════
 mpl.rcParams.update({
     "font.family": "serif",
@@ -419,48 +371,51 @@ if UNC:
     for _lbl, _u in UNC.items():
         print(f"  {_lbl:<34}" + "".join(f"{v:>10.2f}" for v in _u))
 COL_BE_F3, COL_GH_F3, COL_UH = "#009E73", "#E63946", "#6D28D9"
-LINES = [("GHCN-Daily",                      ghcnd,    COL_GH_F3, "-."),
-         ("USHCN-Daily",                     ushcn,    COL_UH, "-."),
-         ("Berkeley Earth",                  berkeley, COL_BE_F3, "-"),
-         ("USHCN-BC",                        ushcn_bc, COL_UH, "-"),
-         ("Berkeley Earth at GHCN Stations",  be_at,   COL_BE_F3, (0, (5, 1.6)))]
-
-# no constrained_layout: it fights the figure-level legend and clips the title
-fig = plt.figure(figsize=(11.5, 6.6))
-fig.subplots_adjust(left=0.095, right=0.98, top=0.755, bottom=0.105)
-ax = fig.add_subplot(111)
-ax.axvspan(1930, 1939, color="tan", alpha=0.22, lw=0, zorder=0)
-if END_METHOD != "none" and END_SHADE:
-    for _x0, _x1 in ((1899, Y0_F3 + HALF - 0.5), (Y1_F3 - HALF + 0.5, 2025)):
-        ax.axvspan(_x0, _x1, color="0.5", alpha=0.07, lw=0, zorder=0)
-for _l, _s, _c, _ls in LINES:
-    ax.plot(_s.index, _s.values, color=_c, lw=0.9, ls=_ls, alpha=0.26, zorder=1)
-if END_METHOD != "none" and END_BAND:
-    for _l, _s, _c, _ls in LINES:
-        end_band(ax, roll(_s), UNC[_l], _c)
-for _l, _s, _c, _ls in LINES:
-    ax.plot(_s.index, roll(_s).values, color=_c, lw=2.6, ls=_ls, label=_l, zorder=3)
-ax.set_xlim(1899, 2025)
-ax.set_ylim(0, 6)
-ax.xaxis.set_major_locator(mticker.MultipleLocator(10))
-ax.set_xlabel("Year")
-ax.set_ylabel("Per grid-cell / per-station average\nnumber of TMAX records per year")
-ax.grid(True, axis="y", color="0.88", lw=0.8)
-ax.grid(False, axis="x")
-h, l = ax.get_legend_handles_labels()
-fig.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, 0.915), ncol=3,
-           frameon=False, handlelength=2.8, columnspacing=1.6, fontsize=12)
-fig.suptitle("CONUS Daily TMAX Record Frequency",
-             fontsize=20, fontweight="bold", y=0.975)
-OUT_F3 = FIGD / (f"Fig3_final_{TAG_F3}_roll{ROLL}"
-                 f"{'' if END_METHOD == 'none' else '_end-' + END_METHOD}_ylim0-6.png")
-fig.savefig(OUT_F3, bbox_inches="tight", dpi=300, facecolor="white")
-fig.savefig(OUT_F3.with_suffix(".pdf"), bbox_inches="tight", facecolor="white")
-plt.show()
-plt.close(fig)
-
-print(f"\nwrote {OUT_F3}")
-print(f"wrote {OUT_F3.with_suffix('.pdf')}")
+# ── THE ONE-PANEL OVERLAY IS DISABLED ──────────────────────────────────────
+# All five series on a single axes, which the panel version below now carries
+# one per panel. Uncomment this block to write Fig3_final_*.png again; the
+# colour constants above and the UNC table are left live because the panel
+# version uses them too. Nothing else in the script depends on it.
+# LINES = [("GHCN-Daily",                      ghcnd,    COL_GH_F3, "-."),
+#          ("USHCN-Daily",                     ushcn,    COL_UH, "-."),
+#          ("Berkeley Earth",                  berkeley, COL_BE_F3, "-"),
+#          ("USHCN-BC",                        ushcn_bc, COL_UH, "-"),
+#          ("Berkeley Earth at GHCN Stations",  be_at,   COL_BE_F3, (0, (5, 1.6)))]
+#
+# # no constrained_layout: it fights the figure-level legend and clips the title
+# fig = plt.figure(figsize=(11.5, 6.6))
+# fig.subplots_adjust(left=0.095, right=0.98, top=0.755, bottom=0.105)
+# ax = fig.add_subplot(111)
+# ax.axvspan(1930, 1939, color="tan", alpha=0.22, lw=0, zorder=0)
+# if END_METHOD != "none" and END_SHADE:
+#     for _x0, _x1 in ((1899, Y0_F3 + HALF - 0.5), (Y1_F3 - HALF + 0.5, 2025)):
+#         ax.axvspan(_x0, _x1, color="0.5", alpha=0.07, lw=0, zorder=0)
+# for _l, _s, _c, _ls in LINES:
+#     ax.plot(_s.index, _s.values, color=_c, lw=0.9, ls="-", alpha=0.26, zorder=1)
+# if END_METHOD != "none" and END_BAND:
+#     for _l, _s, _c, _ls in LINES:
+#         end_band(ax, roll(_s), UNC[_l], _c)
+# for _l, _s, _c, _ls in LINES:
+#     ax.plot(_s.index, roll(_s).values, color=_c, lw=2.6, ls=_ls, label=_l, zorder=3)
+# ax.set_xlim(1899, 2025)
+# ax.set_ylim(0, 6)
+# ax.xaxis.set_major_locator(mticker.MultipleLocator(10))
+# ax.set_xlabel("Year")
+# ax.set_ylabel("Per grid-cell / per-station average\nnumber of TMAX records per year")
+# ax.grid(True, axis="y", color="0.88", lw=0.8)
+# ax.grid(False, axis="x")
+# h, l = ax.get_legend_handles_labels()
+# fig.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, 0.915), ncol=3,
+#            frameon=False, handlelength=2.8, columnspacing=1.6, fontsize=12)
+# fig.suptitle("CONUS Daily TMAX Record Frequency",
+#              fontsize=20, fontweight="bold", y=0.975)
+# OUT_F3 = FIGD / (f"Fig3_final_{TAG_F3}_roll{ROLL}"
+#                  f"{'' if END_METHOD == 'none' else '_end-' + END_METHOD}_ylim0-6.png")
+# fig.savefig(OUT_F3, bbox_inches="tight", dpi=300, facecolor="white")
+# plt.show()
+# plt.close(fig)
+#
+# print(f"\nwrote {OUT_F3}")
 print(f"wrote {SERIES_FP}")
 
 # ══ PANEL VERSION ══════════════════════════════════════════════════════════
@@ -529,7 +484,7 @@ for _i, _ax in enumerate(axesp.ravel()):
     for _l, _s, _c, _ls, _thin in _lines:
         if not _last:
             if _thin:
-                _ax.plot(_s.index, _s.values, color=_c, lw=0.7, ls=_ls, alpha=0.30, zorder=1)
+                _ax.plot(_s.index, _s.values, color=_c, lw=0.7, ls="-", alpha=0.30, zorder=1)
             if END_METHOD != "none" and END_BAND:
                 end_band(_ax, roll(_s), UNC[_l], _c)
         _ax.plot(_s.index, roll(_s).values, color=_c, lw=2.5, ls=_ls, zorder=3,
@@ -544,6 +499,11 @@ for _i, _ax in enumerate(axesp.ravel()):
     _ax.grid(False, axis="x")
     _ax.set_axisbelow(True)
     _ax.set_title(_title, fontweight="bold", pad=8, fontsize=17)
+    # panel letter, top right. axesp.ravel() is row-major and the hidden sixth
+    # slot never reaches here, so this is (a)-(c) across the top row and
+    # (d)-(e) on the bottom, matching the reading order of the titles.
+    _ax.text(0.985, 0.96, f"({'abcdef'[_i]})", transform=_ax.transAxes,
+             ha="right", va="top", fontsize=16, fontweight="bold")
     # the 1930s / 2015-24 ratio rides in the legend where there is one -- a
     # second text block in the same corner collides with it -- and sits top
     # right in the single-line panels, which have no legend to carry it
@@ -559,7 +519,7 @@ for _i, _ax in enumerate(axesp.ravel()):
                    title="1930s / 2015–24 in ( )" if _stat9 else None,
                    title_fontsize=10.5, alignment="left")
     elif PANEL_STAT and not _last:
-        _ax.text(0.97, 0.95, f"1930s / 2015–24 = {_ratio_F3(_lines[0][1])[2]:.2f}",
+        _ax.text(0.97, 0.86, f"1930s / 2015–24 = {_ratio_F3(_lines[0][1])[2]:.2f}",
                  transform=_ax.transAxes, ha="right", va="top", fontsize=12.5,
                  color="0.30")
     if _i % 3 == 0:
@@ -567,13 +527,11 @@ for _i, _ax in enumerate(axesp.ravel()):
                        fontsize=15, labelpad=8)
     if _i + 3 >= N_PANELS:            # nothing below this panel in its column
         _ax.set_xlabel("Year", fontsize=15, labelpad=6)
-figp.suptitle("CONUS Daily TMAX Record Frequency", fontsize=25, fontweight="bold",
-              y=0.985)
-OUT_P3 = FIGD / (f"Fig3_panels_{TAG_F3}_roll{ROLL}"
-                 f"{'' if END_METHOD == 'none' else '_end-' + END_METHOD}_wide.png")
+_SUPTITLE_P3 = None              # the panel titles carry the figure; no banner
+if _SUPTITLE_P3:
+    figp.suptitle(_SUPTITLE_P3, fontsize=25, fontweight="bold", y=0.985)
+OUT_P3 = FIGD / "Figure3.png"
 figp.savefig(OUT_P3, bbox_inches="tight", dpi=200, facecolor="white")
-figp.savefig(OUT_P3.with_suffix(".pdf"), bbox_inches="tight", facecolor="white")
 plt.show()
 plt.close(figp)
 print(f"wrote {OUT_P3}")
-print(f"wrote {OUT_P3.with_suffix('.pdf')}")

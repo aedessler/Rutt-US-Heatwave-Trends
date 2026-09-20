@@ -343,7 +343,11 @@ for bi, (band_top, band_bot) in enumerate(_BLOCK_BANDS_F2):
 
 for bi in range(3):
     for si, s in enumerate(SEASON_LIST_F2):
-        ax = _axes_F2[(bi, s)]; specs = all_specs_F2[(bi, s)]; n = len(specs)
+        ax = _axes_F2[(bi, s)]
+        # GHCN-Daily suppressed from the plot; all_specs_F2 (and the CHECK
+        # table above) still carry it.
+        specs = [sp for sp in all_specs_F2[(bi, s)] if sp[0] != LABELS_F2["ghcnd"]]
+        n = len(specs)
         ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
         ax.spines["left"].set_linewidth(1.4); ax.spines["bottom"].set_linewidth(1.4)
         for xi, (lbl, dust_v, yr36_v, mod_v, yr24_v) in enumerate(specs):

@@ -419,19 +419,20 @@ COL_BE_F3, COL_GH_F3, COL_UH = "#009E73", "#E63946", "#6D28D9"
 print(f"wrote {SERIES_FP}")
 
 # ══ PANEL VERSION ══════════════════════════════════════════════════════════
-# The same five series, one per panel, in the layout and style vocabulary of
-# Figure 6's FigHW_conus_vs_global_ushcn_overlay_wide: a grid of wide panels,
-# bold column titles, shared y so the panels are comparable by eye, annual
-# trace under a heavy smoothed curve, Dust Bowl in firebrick.
+# Four series (GHCN-Daily suppressed, see PANELS below), one per panel in a
+# 2x2 grid, in the layout and style vocabulary of Figure 6's
+# FigHW_conus_vs_global_ushcn_overlay_wide: bold column titles, shared y so
+# the panels are comparable by eye, annual trace under a heavy smoothed
+# curve, Dust Bowl in firebrick.
 #
 #   solid     homogenised / bias-corrected     USHCN-BC, Berkeley Earth
-#   dot-dash  UNCORRECTED station data         GHCN-Daily, USHCN-Daily
+#   dot-dash  UNCORRECTED station data         USHCN-Daily
 #   dashed    re-sampled onto another network  Berkeley Earth at GHCN Stations
 #
 # Note the colour change against the overlay figure: the re-sampled Berkeley
 # line is the DARKER green here, not the same green as the full grid, which is
 # Figure 6's fix for two heavy lines of one colour merging wherever they cross.
-# It only matters in the sixth panel, where all five are drawn together.
+# It only matters in the last panel, where both re-samplings are drawn together.
 PANEL_W_F3, PANEL_H_F3 = 5.6, 3.25
 PANEL_YLIM_F3 = (0, 6)           # as the overlay figure: the 1930s spikes clip
 PANEL_OVERLAY = False            # True spends the spare slot on all of them together
@@ -445,7 +446,9 @@ C_SAMP_UH_F3  = "#3F9B78"                   # ... and a second value of it, for 
 C_CORR_F3     = "#A78BFA"                   # USHCN's hue, lightened: same data, rescaled
 # (title, [(label, series, colour, linestyle, draw the annual trace too)])
 PANELS = [
-    ("GHCN-Daily",  [("GHCN-Daily", ghcnd, COL_GH_F3, LS_UNCORR_F3, True)]),
+    # ("GHCN-Daily", [("GHCN-Daily", ghcnd, COL_GH_F3, LS_UNCORR_F3, True)]),
+    # GHCN-Daily suppressed from the plot; ghcnd is still computed above and
+    # carried in SER/NU for the console CHECK and TRENDS tables and the CSV.
     ("USHCN-Daily", [("USHCN-Daily", ushcn, COL_UH, LS_UNCORR_F3, True)]),
     ("USHCN-BC",    [("USHCN-BC", ushcn_bc, COL_UH, "-", True),
                      ("USHCN-BC × BE/BE-at-USHCN", ushcn_bc_full,
@@ -462,7 +465,7 @@ PANELS = [
 OVERLAY = [ln for _t, lns in PANELS for ln in lns]
 N_PANELS = len(PANELS) + (1 if PANEL_OVERLAY else 0)
 
-figp, axesp = plt.subplots(2, 3, figsize=(PANEL_W_F3 * 3, PANEL_H_F3 * 2.28),
+figp, axesp = plt.subplots(2, 2, figsize=(PANEL_W_F3 * 2, PANEL_H_F3 * 2.28),
                            sharey=True, gridspec_kw={"hspace": 0.34, "wspace": 0.075})
 for _i, _ax in enumerate(axesp.ravel()):
     _last = _i == len(PANELS)
@@ -499,9 +502,9 @@ for _i, _ax in enumerate(axesp.ravel()):
     _ax.grid(False, axis="x")
     _ax.set_axisbelow(True)
     _ax.set_title(_title, fontweight="bold", pad=8, fontsize=17)
-    # panel letter, top right. axesp.ravel() is row-major and the hidden sixth
-    # slot never reaches here, so this is (a)-(c) across the top row and
-    # (d)-(e) on the bottom, matching the reading order of the titles.
+    # panel letter, top right. axesp.ravel() is row-major, so this is (a)-(b)
+    # across the top row and (c)-(d) on the bottom, matching the reading
+    # order of the titles.
     _ax.text(0.985, 0.96, f"({'abcdef'[_i]})", transform=_ax.transAxes,
              ha="right", va="top", fontsize=16, fontweight="bold")
     # the 1930s / 2015-24 ratio rides in the legend where there is one -- a
@@ -522,10 +525,10 @@ for _i, _ax in enumerate(axesp.ravel()):
         _ax.text(0.97, 0.86, f"1930s / 2015–24 = {_ratio_F3(_lines[0][1])[2]:.2f}",
                  transform=_ax.transAxes, ha="right", va="top", fontsize=12.5,
                  color="0.30")
-    if _i % 3 == 0:
+    if _i % 2 == 0:
         _ax.set_ylabel("Records per year\n(per station or grid cell)",
                        fontsize=15, labelpad=8)
-    if _i + 3 >= N_PANELS:            # nothing below this panel in its column
+    if _i + 2 >= N_PANELS:            # nothing below this panel in its column
         _ax.set_xlabel("Year", fontsize=15, labelpad=6)
 _SUPTITLE_P3 = None              # the panel titles carry the figure; no banner
 if _SUPTITLE_P3:

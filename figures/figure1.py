@@ -230,6 +230,9 @@ with mpl.rc_context(STYLE_F1):
                                           ("tavg", "(c) TAVG: JJA"))):
         ax.axvspan(*DUSTBOWL_F1, color="#caa472", alpha=0.18, lw=0, zorder=0)
         for key in PANEL_SETS_F1[elem]:
+            if key == "ghcnd":
+                continue          # GHCN-Daily suppressed from the plot; still
+                                   # computed above and in the CHECK table
             s = S_F1.get((key, elem))
             if s is None:
                 continue

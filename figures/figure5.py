@@ -337,7 +337,11 @@ _lo, _hi = np.nanmin(_drawn) - _pad, np.nanmax(_drawn) + _pad
 fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True, constrained_layout=True)
 for ax, (title, kg, kb) in zip(axes, PANELS):
     ax.axvspan(*DUSTBOWL, color="#caa472", alpha=0.18, lw=0, zorder=0)
-    for lbl, k, col in (("GHCN-Daily", kg, COL_GH_F5), ("Berkeley Earth", kb, COL_BE_F5)):
+    for lbl, k, col in (
+        # ("GHCN-Daily", kg, COL_GH_F5),  # suppressed from the plot; kg is
+        # still computed and checked above
+        ("Berkeley Earth", kb, COL_BE_F5),
+    ):
         if SHOW_ANNUAL_F5:
             ax.plot(YEARS_F5, S[k].values, color=col, lw=0.9, alpha=0.28, zorder=2)
         ax.plot(YEARS_F5, SM[k].values, color=col, lw=2.4, label=lbl, zorder=3)

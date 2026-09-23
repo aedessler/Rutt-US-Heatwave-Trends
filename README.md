@@ -11,7 +11,7 @@ whether station data are bias-corrected, and which stations are in the network.
 
 | File | Contents |
 | --- | --- |
-| `figures/` | One script per figure — `figure1.py` … `figure6.py` — plus `common.py` (paths and shared machinery) and `prepare_data.py` (builds the inputs the archive does not carry). See `figures/README.md`. |
+| `figures/` | One script per figure — `figure1.py` … `figure6.py` — plus `common.py` (paths and shared machinery), `prepare_data.py` (builds the inputs the archive does not carry) and `build_derived.py` (rebuilds the two archive-level derived products, which is what extends the record past 2024). See `figures/README.md`. |
 | `US-Heatwave-Trends-Analysis-Code.ipynb` | The original notebook the scripts were split out of. Every figure, shared code first, then one section per figure. Saved with its outputs, so the figures are visible without running anything. |
 | `requirements.txt` | Python packages. |
 | `.gitignore` | Keeps data, caches and generated figures out of the repository. |
@@ -20,14 +20,16 @@ Notebook or scripts, either produces the figures. Use the notebook to read the a
 in order, the scripts to rebuild one figure. The scripts are what currently runs against
 the lab archive — the notebook still carries the original author's paths.
 
-For Figures 2, 4 and 6 the analysis code is identical, line for line. **Figures 1, 3 and 5
-differ.** All three now draw the same smoother, which lives in `figures/common.py`: an
-11-year centered mean carried to both ends of the record by a local linear fit. Figure 1
-also moves from an even 10-year window, which pandas centered asymmetrically, to that
-odd 11-year one. `figures/figure3.py` additionally gained Berkeley read at the USHCN
-sites, a sampling correction applied to USHCN-BC, and a second panel layout. The
-notebook's sections were deliberately left as they were, so they still draw the original
-figures. `figures/README.md` lists the differences.
+For Figures 4 and 6 the analysis code is identical, line for line. **Figures 1, 2, 3 and 5
+differ.** Figures 1, 3 and 5 now draw the same smoother, which lives in
+`figures/common.py`: an 11-year centered mean carried to both ends of the record by a
+local linear fit. Figure 1 also moves from an even 10-year window, which pandas centered
+asymmetrically, to that odd 11-year one. `figures/figure3.py` additionally gained
+Berkeley read at the USHCN sites, a sampling correction applied to USHCN-BC, and a second
+panel layout. `figures/figure2.py` now draws JJA only, one panel per element, with
+GHCN-Daily and Berkeley-at-USHCN suppressed from the bars (both are still computed and
+printed in its CHECK table). The notebook's sections were deliberately left as they were,
+so they still draw the original figures. `figures/README.md` lists the differences.
 
 Figure S1 of the paper is not in the notebook and has no script here.
 
@@ -109,6 +111,53 @@ Three inputs the figures need are not on the archive in that form, and
 unreliable HDF5 reads over the network share, and `prepare_data.py prune` for reclaiming
 the staged copies afterwards.
 
+### Extending the record
+
+Two things `prepare_data.py` reads are themselves derived, and the code that first built
+the copies on the archive is not in this repository, so for a while the record simply
+could not be moved past 2024. `build_derived.py` rebuilds both: the QC'd GHCN-Daily CONUS
+daily cube (`GHCND/station_daily/<year>.nc`) and the USHCN homogenization offsets
+(`USHCN_v2.5/derived/ushcn_offsets_<y0>_<y1>.nc`). Their rules were recovered from the
+files' own metadata and from the data, and `--verify` rebuilds an existing year (or the
+whole offset range) and diffs it against the archived copy; both reproduce it exactly.
+
+```bash
+python figures/build_derived.py cube    --verify 2024      # reproduces the archived file
+python figures/build_derived.py offsets --verify
+python figures/build_derived.py cube    2025 --out DIR
+python figures/build_derived.py offsets --y1 2026 --out DIR
+```
+
+How far the record runs depends on the season a figure uses, because the datasets end at
+different dates (archives refreshed from source on 2026-09-20):
+
+| Figure | Season | Runs to | Why it stops there |
+| --- | --- | --- | --- |
+| 1 | JJA | **2026** | June-August 2026 is complete in GHCN-Daily, USHCN and nCLIMDIV |
+| 2 | JJA | 2025 | its bars are fixed years, so 2026 would not be drawn |
+| 3, 6 | May-Sep | 2025 | September 2026 is not finished |
+| 5 | JJA | 2025 | its co-sample needs a cell in both GHCN and Berkeley |
+| 4 | — | 2024 | Berkeley-only |
+
+Only four datasets reach JJA 2026, so Figure 1's last point carries nCLIMDIV, GHCN-Daily,
+USHCN-Daily and USHCN-BC alone. Berkeley's daily release ends 2024-08-31; ERA5 is not on
+the archive past 2025-12 and would have to be rebuilt from Copernicus; NOAAGlobalTemp's
+gridded file ends 2025-12 and NCEI has published no newer one; CRUTEM5 reaches 2026-07,
+one month short. **That 2026 point is provisional** — USHCN's most recent months are still
+filling in (a month needs roughly three to reach full station coverage), so it will move
+as late reports arrive.
+
+Figures 3 and 6 can take 2026 once September closes, in early October 2026, though the
+same settling argument suggests waiting until around December for a stable value.
+
+**Refreshing USHCN moves the historical record, but not the result.** USHCN v2.5 reruns
+its pairwise homogenization from scratch on every build, so pulling a newer copy changed
+64% of historical station-month offsets, some by as much as 1.9 °C. The station-level
+churn very nearly cancels: the CONUS-mean adjustment moved about 0.004 °C, the
+homogenization signal the paper reports moved by 0.0007 °C, and Figures 2 and 3 came out
+numerically identical. Worth re-checking whenever the archive is refreshed, not worth
+fearing.
+
 ### Data sources
 
 | Dataset | Source |
@@ -124,8 +173,8 @@ the staged copies afterwards.
 
 | Script | Notebook section | Figure | What it shows |
 | --- | --- | --- | --- |
-| `figure1.py` | 5 | Figure 1 | CONUS JJA anomalies, TMAX / TMIN / TAVG, eight datasets, 1900-2024 |
-| `figure2.py` | 6 | Figure 2 | Seasonal bars, DJF-SON by element, Dust Bowl vs. modern |
+| `figure1.py` | 5 | Figure 1 | CONUS JJA anomalies, TMAX / TMIN / TAVG, eight datasets, 1900-2025 |
+| `figure2.py` | 6 | Figure 2 | JJA bars by element, Dust Bowl vs. modern |
 | `figure3.py` | 7 | Figure 3 | CONUS daily TMAX record frequency, May-September — two layouts; the one script that has diverged from the notebook |
 | `figure4.py` | 8 | Figure 4 | Berkeley Earth exceedance maps, p95 from the full record |
 | `figure5.py` | 9 | Figure 5 | Northern mid-latitude band, 24-50N, JJA |
@@ -169,8 +218,8 @@ weighted by its spherical band area times the fraction of the cell inside the po
 neighbours, 150 km cutoff), except where a figure counts at stations on purpose.
 
 **Records** (Figure 3) are counted per calendar day, May-September: for each station or
-cell, the year holding the highest TMAX of 1900-2024 gets that day, and years sharing the
-highest value split it equally. A location must have data in at least 100 of 125 years
+cell, the year holding the highest TMAX of 1900-2025 gets that day, and years sharing the
+highest value split it equally. A location must have data in at least 100 of the 126 years
 and 80% of possible days.
 
 **Station sampling is separated from climate** (Figure 3) by reading Berkeley Earth twice:

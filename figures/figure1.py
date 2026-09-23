@@ -29,10 +29,10 @@ FIGD.mkdir(exist_ok=True)
 NCLIMDIV_FILES_F1 = {e: nclimdiv_file(e) for e in ("tmax", "tmin", "tavg")}
 NCLIMDIV_ELEM_F1  = dict(tmax=27, tmin=28, tavg=2)     # element codes in the statewide file
 
-YEARS_F1   = np.arange(1900, 2025)                      # his YEAR_START..YEAR_END
+YEARS_F1   = np.arange(1900, 2027)                      # his YEAR_START..YEAR_END
 JJA_F1     = (6, 7, 8)
 IDW_KW_F1 = dict(power=2.0, k=8, radius_km=150.0)
-ERA5_Y0_F1, ERA5_Y1_F1 = 1940, 2024
+ERA5_Y0_F1, ERA5_Y1_F1 = 1940, 2025
 DUSTBOWL_F1 = (1930, 1940)
 
 COL_F1 = dict(era5="#D55E00", berkeley="#009E73", nclimdiv="#F59E0B", ghcnd="#E63946",
@@ -44,6 +44,14 @@ HOMOG_F1 = dict(era5=True, berkeley=True, nclimdiv=True, ghcnd=False,
                ushcn=False, ushcn_bc=True, noaa=True, crutem5=True)
 LS_HOMOG_F1, LS_RAW_F1 = "-", "-."
 LW_ANN_F1, LW_SM_F1, ALPHA_ANN_F1 = 0.9, 2.2, 0.28
+SMOOTH_FROM_RECORD_START_F1 = True   # loclin over a series' OWN first ROLL//2
+                                     # years, not the axis's. ERA5 starts in
+                                     # 1940, so its smooth starts in 1940 rather
+                                     # than 1945 (2026-09-23 request; Figure 5
+                                     # got the same change). Set False for the
+                                     # old behaviour. ERA5 is the only series
+                                     # here that starts after the axis does, so
+                                     # nothing else moves either way.
 STYLE_F1 = {"font.family": "serif",
            "font.serif": ["Times New Roman", "Times", "STIXGeneral", "DejaVu Serif"],
            "mathtext.fontset": "stix", "font.size": 14, "axes.titlesize": 18,
@@ -59,17 +67,32 @@ def gridded_series_F1(field, weights):
             pd.Series(season_mean(_to_year_month(frac, YEARS_F1), JJA_F1, YEARS_F1), index=YEARS_F1))
 
 def smooth_F1(s):
-    """The smoother Figures 1, 3 and 5 now share: an 11-year centered mean with
-    a local-linear fit standing in over the outer ROLL//2 years at each end of
-    the record. strict_interior keeps the plain full-window rule everywhere
-    else, so a gap is still a gap -- ERA5 starts in 1940 and its smooth starts
-    five years later, rather than having a six-point line drawn through the
-    boundary."""
-    return roll(s, strict_interior=True)
+    """The smoother Figures 1, 3 and 5 share: an 11-year centered mean with a
+    local-linear fit standing in over the outer ROLL//2 years at each end of the
+    record. strict_interior keeps the plain full-window rule everywhere else, so
+    a mid-record gap is still a gap rather than having a six-point line drawn
+    through it.
+
+    The series is cut to its OWN first and last year before smoothing. The end
+    region is otherwise measured from the ends of the AXIS, which runs to 2026
+    here, so a record that starts or stops elsewhere has its own edge years
+    treated as interior: they want a full 11-year window, it reaches into empty
+    years, and the curve comes out five years short of the data with a detached
+    loclin segment beyond it. Berkeley ends 2024-08-31 and needed the tail
+    trimmed; ERA5 starts in 1940 and needed the head trimmed, or its line began
+    in 1945 with five years of real data uncovered. ERA5 is the only series here
+    that starts after the axis does, so the head trim moves nothing else."""
+    first, last = s.first_valid_index(), s.last_valid_index()
+    if last is None:
+        return s
+    if not SMOOTH_FROM_RECORD_START_F1:
+        first = s.index[0]
+    return roll(s.loc[first:last], strict_interior=True).reindex(s.index)
 
 def station_series_F1(dataset, elem, weights05, gridder):
     """the whole station chain, cached at the gridded-field stage."""
-    key = f"grid_{dataset}_{elem}_p{IDW_KW_F1['power']:g}_k{IDW_KW_F1['k']}_r{IDW_KW_F1['radius_km']:g}"
+    key = (f"grid_{dataset}_{elem}_p{IDW_KW_F1['power']:g}_k{IDW_KW_F1['k']}"
+           f"_r{IDW_KW_F1['radius_km']:g}_{YEARS_F1[0]}_{YEARS_F1[-1]}")
     def build():
         sm = station_anomalies(station_months(dataset, elem, YEARS_F1))
         return grid_station_field(sm, gridder, YEARS_F1)
@@ -134,7 +157,7 @@ def era5_field_F1(varname, elem):
                 f"Refusing to cache a partial field -- fix the archive and re-run.")
         out = xr.concat(parts, dim="time").sortby("time")
         return out.sortby("lat")
-    return _cache(f"field_era5_{elem}", build)
+    return _cache(f"field_era5_{elem}_{ERA5_Y0_F1}_{ERA5_Y1_F1}", build)
 
 def nclimdiv_series_F1(elem):
     """NOAA's OFFICIAL area-weighted CONUS series: statewide file, region 110."""

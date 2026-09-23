@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Figure 2 -- CONUS seasonal temperature anomaly bars.
+"""Figure 2 -- CONUS JJA temperature anomaly bars.
 
-Dust Bowl mean, 1936, 2015-2024 mean and 2024, for each season and each
-element. Notebook section 6.
+Dust Bowl mean, 1936, 2015-2024 mean and 2024, for each element, JJA only,
+one panel per element. GHCN-Daily and BE @ USHCN are suppressed from the
+plot; both are still computed and printed in the CHECK table. Notebook
+section 6 (which covers all four seasons; this script draws JJA alone).
 
     python figures/figure2.py
 """
@@ -41,12 +43,12 @@ UH_LABEL_ADJ_F2 = "USHCN-BC"
 BE_LABEL_MSK_F2 = "BE @ USHCN"
 BE_NETWORK_F2   = "ushcn"          # footprint for the masked Berkeley leg
 BE_MASK_TIME_VARYING_F2 = False    # see the header note
-FS_XTICK_V_F2 = None               # None = v15 sizing; 26 declutters the TAVG label row
+FS_XTICK_V_F2 = None               # None = default sizing; 26 declutters the TAVG label row
 
 # ── Settings ─────────────────────────────────────────────────────────────────
-YEARS_F2     = np.arange(1900, 2026)      # v15's window; DJF-2025 needs Jan-Feb 2025
+YEARS_F2     = np.arange(1900, 2026)      # DJF-2025 needs Jan-Feb 2025 -- kept for parity
 SEASONS_F2   = {"DJF":(12,1,2), "MAM":(3,4,5), "JJA":(6,7,8), "SON":(9,10,11)}
-SEASON_LIST_F2 = ["DJF","MAM","JJA","SON"]
+SEASON_LIST_F2 = ["JJA"]           # this figure draws JJA only
 SEASON_TITLES_F2 = {"DJF":"DJF (Dec-Feb)", "MAM":"MAM (Mar-May)",
                    "JJA":"JJA (Jun-Aug)", "SON":"SON (Sep-Nov)"}
 MIN_COV_FRAC_F2  = 0.50    # season dropped if less than this share of CONUS reported
@@ -58,7 +60,7 @@ DUST_START_F2, DUST_END_F2 = 1930, 1939
 YEAR_1936_F2, YEAR_2024_F2 = 1936, 2024
 FIXED_MODERN_START_F2, FIXED_MODERN_END_F2 = 2015, 2024
 
-# ── Colours (v15's) ──────────────────────────────────────────────────────────
+# ── Colours ──────────────────────────────────────────────────────────────────
 _BAR_COLS_F2 = ["#009E73", "#06B6D4", "#F59E0B", "#E63946"]
 
 def _mad_filt_F2(s, k=MAD_K_F2):
@@ -81,7 +83,7 @@ def _trim_tail_F2(s, z_k=6.0):
     return s.where(pd.Series(keep, index=s.index))
 
 def _to_da_F2(s):
-    """pandas Series indexed by year -> DataArray on a Jan-1 axis, so the v15
+    """pandas Series indexed by year -> DataArray on a Jan-1 axis, so the
     period-mean helpers below work unchanged."""
     s = s.dropna()
     ti = pd.DatetimeIndex([pd.Timestamp(f"{int(y)}-01-01") for y in s.index])
@@ -118,8 +120,6 @@ def berkeley_field_F2(fp, elem):
     return _cache(f"field16_berkeley_{elem}", build)
 
 # nCLIMDIV: NOAA's OFFICIAL area-weighted CONUS national mean (region 110).
-# Unchanged from v14/v15, which already had this right.
-# name resolved from the archive rather than pinned to one processing date
 _NCLIMDIV_FILES_F2 = {e: nclimdiv_file(e) for e in ('tmax', 'tmin', 'tavg')}
 _NCLIMDIV_ELEM_F2  = {'tmax':27, 'tmin':28, 'tavg':2}
 
@@ -140,7 +140,7 @@ def nclimdiv_seasonal_F2(elem, season):
     s = pd.Series(season_mean(ym-clim[None,:], SEASONS_F2[season], YEARS_F2), index=YEARS_F2)
     return _to_da_F2(_trim_tail_F2(_mad_filt_F2(s)))
 
-# ── the masked-Berkeley footprint (v15's rule, unchanged) ────────────────────
+# ── the masked-Berkeley footprint ─────────────────────────────────────────────
 def _be_stations_F2():
     st = pd.read_parquet(str(UH_PAIRED), columns=["ushcn_id","lat","lon"])
     st = st.groupby("ushcn_id")[["lat","lon"]].first()
@@ -161,7 +161,7 @@ def _be_cells_F2(lat, lon, st_lat, st_lon):
     m = np.zeros_like(ms); m[np.ix_(oa, oo)] = ms
     return m, int(ok.sum())
 
-# ── v15's period-mean helpers, unchanged ─────────────────────────────────────
+# ── period-mean helpers ────────────────────────────────────────────────────
 def _pm_F2(da, y0, y1, min_yrs=MIN_PERIOD_YRS_F2):
     yrs = da["time"].dt.year.values
     v = np.asarray(da.values, float)[(yrs >= y0) & (yrs <= y1)]
@@ -221,7 +221,7 @@ for _e in ("tmax", "tmin", "tavg"):
     for _s in SEASON_LIST_F2:
         SER_F2[("nclimdiv", _e, _s)] = nclimdiv_seasonal_F2(_e, _s)
 
-# ══ SPECS (v15's bar order; ERA20C dropped -- it was never drawn) ═══════════
+# ══ SPECS ═══════════════════════════════════════════════════════════════════
 LABELS_F2 = {"berkeley": "Berkeley", "be_msk": BE_LABEL_MSK_F2, "nclimdiv": "nCLIMDIV",
             "noaa": "NOAAGlobalTemp", "crutem5": "CRUTEM5", "ghcnd": "GHCN-Daily",
             "ushcn": UH_LABEL_RAW_F2, "ushcn_bc": UH_LABEL_ADJ_F2}
@@ -263,9 +263,10 @@ row_ylims_F2 = []
 for ri in range(3):
     vals = [v for s in SEASON_LIST_F2 for sp in all_specs_F2[(ri, s)]
             for v in sp[1:5] if v is not None and np.isfinite(v)]
-    row_ylims_F2.append((min(vals)-0.20, max(vals)+0.20) if vals else (-2.0, 2.0))
+    row_ylims_F2.append((min(0.0, min(vals)-0.20), max(vals)+0.20) if vals else (0.0, 2.0))
 
-# ══ CHECK -- Figure 2 bars, before plotting. Every bar that will be drawn. ══
+# ══ CHECK -- Figure 2 (JJA) bars, before plotting. GHCN-Daily and BE @ USHCN
+# still carried here even though the plot below suppresses them. ══
 print(f"{'dataset':<16}{'DustBowl':>10}{'1936':>8}{'2015-24':>9}{'2024':>8}")
 for _lbl, _db, _y36, _md, _y24 in all_specs_F2[(0, "JJA")]:
     _f = lambda v: f"{v:>+8.2f}" if v is not None and np.isfinite(v) else f"{'n/a':>8}"
@@ -276,23 +277,21 @@ if _MISSING_F2:
         print(f"  {_e:<5}{_s:<5}{_lbl:<14}{_why}")
 _n_series = sum(1 for _v in SER_F2.values() if _v is not None)
 print(f"\n{_n_series} seasonal series built "
-      f"({len(ORDER_F2['tavg'])} datasets x {len(SEASON_LIST_F2)} seasons x 3 elements)")
+      f"({len(ORDER_F2['tavg'])} datasets x {len(SEASON_LIST_F2)} season x 3 elements)")
 
-# ══ PLOT -- v15's plot block, names suffixed 16. ═══════════════════════════
-FS_MAIN_F2, FS_BLOCK_F2, FS_PANEL_F2 = 44, 40, 34
-FS_YLABEL_F2, FS_XTICK_F2, FS_YTICK_F2, FS_LEG_F2 = 30, 32, 28, 36
+# ══ PLOT -- one panel per element, JJA only ═════════════════════════════════
+FS_MAIN_F2, FS_BLOCK_F2 = 20, 16
+FS_YLABEL_F2, FS_XTICK_F2, FS_YTICK_F2, FS_LEG_F2 = 13, 12, 11, 12
 
 VAR_BLOCK_LABELS_F2 = ["(a) TMAX  —  Daily maximum temperature",
                       "(b) TMIN  —  Daily minimum temperature",
                       "(c) TAVG  —  Daily mean temperature"]
-PANEL_LETTERS_F2 = ["i","ii","iii","iv"]
 _w_F2, _B_OFF_F2 = 0.18, [-0.30,-0.10,0.10,0.30]
-_BEDGE_F2, _BLW_F2, _Y_NM_TIERS_F2 = "white", 0.8, [-0.10,-0.28]
+_BEDGE_F2, _BLW_F2, _Y_NM_TIERS_F2 = "white", 0.8, [-0.10]
 _FS_NM_F2 = FS_XTICK_F2 if FS_XTICK_V_F2 is None else FS_XTICK_V_F2
-_BLOCK_BANDS_F2 = [(0.885,0.651),(0.579,0.346),(0.274,0.040)]
 _NM_PAD_F2       = 0.12    # minimum gap between same-tier names, in bar-group widths
 _NM_MAX_SHIFT_F2 = 0.40    # beyond this sideways drift, shrink the font instead
-_NM_MIN_FS_F2    = 24
+_NM_MIN_FS_F2    = 8
 
 def _pav_F2(y):
     """least-squares non-decreasing fit (pool-adjacent-violators)."""
@@ -329,53 +328,42 @@ def _declutter_names_F2(ax, texts, renderer):
     for _, _, tx in texts:
         tx.set_x(newx[id(tx)])
 
-fig_F2 = plt.figure(figsize=(28, 44))
-_axes_F2 = {}
+fig_F2, axes_F2 = plt.subplots(3, 1, figsize=(11, 13))
+fig_F2.subplots_adjust(left=0.09, right=0.98, top=0.90, bottom=0.05, hspace=0.55)
 _names_F2 = {}
-for bi, (band_top, band_bot) in enumerate(_BLOCK_BANDS_F2):
-    gs = GridSpec(2, 2, figure=fig_F2, top=band_top, bottom=band_bot,
-                  left=0.085, right=0.985, hspace=0.62, wspace=0.16)
-    for sub_r in range(2):
-        for ci in range(2):
-            _axes_F2[(bi, SEASON_LIST_F2[sub_r*2+ci])] = fig_F2.add_subplot(gs[sub_r, ci])
-    fig_F2.text(0.085, band_top + 0.020, VAR_BLOCK_LABELS_F2[bi], ha="left", va="bottom",
-               fontsize=FS_BLOCK_F2, fontweight="bold", color="0.10")
-
-for bi in range(3):
-    for si, s in enumerate(SEASON_LIST_F2):
-        ax = _axes_F2[(bi, s)]
-        # GHCN-Daily suppressed from the plot; all_specs_F2 (and the CHECK
-        # table above) still carry it.
-        specs = [sp for sp in all_specs_F2[(bi, s)] if sp[0] != LABELS_F2["ghcnd"]]
-        n = len(specs)
-        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_linewidth(1.4); ax.spines["bottom"].set_linewidth(1.4)
-        for xi, (lbl, dust_v, yr36_v, mod_v, yr24_v) in enumerate(specs):
-            for off, val, bc in zip(_B_OFF_F2, [dust_v, mod_v, yr36_v, yr24_v], _BAR_COLS_F2):
-                if np.isfinite(val):
-                    ax.bar(xi+off, val, width=_w_F2, color=bc,
-                           edgecolor=_BEDGE_F2, linewidth=_BLW_F2, zorder=3)
-        trans = blended_transform_factory(ax.transData, ax.transAxes)
-        _names_F2[(bi, s)] = [
-            (xi, xi % 2, ax.text(xi, _Y_NM_TIERS_F2[xi % 2], lbl, transform=trans,
-                                 ha="center", va="top", fontsize=_FS_NM_F2,
-                                 color="0.10", clip_on=False))
-            for xi, (lbl, *_) in enumerate(specs)]
-        ax.axhline(0, color="0.25", lw=1.6, zorder=2)
-        ax.set_xticks(np.arange(n)); ax.tick_params(axis="x", length=0)
-        ax.set_xticklabels([]); ax.set_xlim(-0.55, n-0.45)
-        ax.set_ylim(*row_ylims_F2[bi])
-        ax.grid(True, axis="y", color="0.88", lw=1.1, zorder=0); ax.grid(False, axis="x")
-        ax.yaxis.set_major_locator(mticker.MultipleLocator(0.5))
-        ax.tick_params(axis="y", labelsize=FS_YTICK_F2, length=9, width=1.6)
-        if si % 2 == 0:
-            ax.set_ylabel("Anomaly (deg C)", fontsize=FS_YLABEL_F2, labelpad=12)
-        ax.set_title(f"({PANEL_LETTERS_F2[si]}) {SEASON_TITLES_F2[s]}",
-                     fontweight="bold", fontsize=FS_PANEL_F2, pad=16)
+_hidden_F2 = {LABELS_F2["ghcnd"], LABELS_F2["be_msk"]}
+for bi, ax in enumerate(axes_F2):
+    # GHCN-Daily and BE @ USHCN suppressed from the plot; all_specs_F2 (and the
+    # CHECK table above) still carry both.
+    specs = [sp for sp in all_specs_F2[(bi, "JJA")] if sp[0] not in _hidden_F2]
+    n = len(specs)
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_linewidth(1.2); ax.spines["bottom"].set_linewidth(1.2)
+    for xi, (lbl, dust_v, yr36_v, mod_v, yr24_v) in enumerate(specs):
+        for off, val, bc in zip(_B_OFF_F2, [dust_v, mod_v, yr36_v, yr24_v], _BAR_COLS_F2):
+            if np.isfinite(val):
+                ax.bar(xi+off, val, width=_w_F2, color=bc,
+                       edgecolor=_BEDGE_F2, linewidth=_BLW_F2, zorder=3)
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+    _names_F2[bi] = [
+        (xi, 0, ax.text(xi, _Y_NM_TIERS_F2[0], lbl, transform=trans,
+                             ha="center", va="top", fontsize=_FS_NM_F2,
+                             color="0.10", clip_on=False))
+        for xi, (lbl, *_) in enumerate(specs)]
+    ax.axhline(0, color="0.25", lw=1.4, zorder=2)
+    ax.set_xticks(np.arange(n)); ax.tick_params(axis="x", length=0)
+    ax.set_xticklabels([]); ax.set_xlim(-0.55, n-0.45)
+    ax.set_ylim(*row_ylims_F2[bi])
+    ax.grid(True, axis="y", color="0.88", lw=1.0, zorder=0); ax.grid(False, axis="x")
+    ax.yaxis.set_major_locator(mticker.MultipleLocator(0.5))
+    ax.tick_params(axis="y", labelsize=FS_YTICK_F2, length=7, width=1.2)
+    ax.set_ylabel("Anomaly (deg C)", fontsize=FS_YLABEL_F2, labelpad=8)
+    ax.set_title(VAR_BLOCK_LABELS_F2[bi], loc="left", fontweight="bold",
+                 fontsize=FS_BLOCK_F2, pad=10)
 
 _rend_F2 = fig_F2.canvas.get_renderer()
-for (bi, s), texts in _names_F2.items():
-    _declutter_names_F2(_axes_F2[(bi, s)], texts, _rend_F2)
+for bi, texts in _names_F2.items():
+    _declutter_names_F2(axes_F2[bi], texts, _rend_F2)
 
 _leg_handles_F2 = [
     mpatches.Patch(facecolor=_BAR_COLS_F2[0], label=f"Dust Bowl mean ({DUST_START_F2}-{DUST_END_F2})"),
@@ -384,12 +372,11 @@ _leg_handles_F2 = [
     mpatches.Patch(facecolor=_BAR_COLS_F2[3], label=str(YEAR_2024_F2)),
 ]
 fig_F2.legend(handles=_leg_handles_F2, loc="upper center", ncol=4, frameon=False,
-             bbox_to_anchor=(0.5, 0.952), handlelength=2.4, columnspacing=2.6,
+             bbox_to_anchor=(0.5, 0.975), handlelength=2.2, columnspacing=1.8,
              fontsize=FS_LEG_F2)
-fig_F2.text(0.5, 0.972,
-           f"CONUS Seasonal Temperature Anomalies  |  {DUST_START_F2}-{DUST_END_F2} vs. "
-           f"{FIXED_MODERN_START_F2}-{FIXED_MODERN_END_F2} vs. {YEAR_1936_F2} vs. {YEAR_2024_F2}",
-           ha="center", va="bottom", fontsize=FS_MAIN_F2, fontweight="bold")
+fig_F2.suptitle(f"CONUS JJA Temperature Anomalies  |  {DUST_START_F2}-{DUST_END_F2} vs. "
+               f"{FIXED_MODERN_START_F2}-{FIXED_MODERN_END_F2} vs. {YEAR_1936_F2} vs. {YEAR_2024_F2}",
+               fontsize=FS_MAIN_F2, fontweight="bold", y=1.02)
 
 _out_F2 = FIGD / "Figure2.png"
 _out_F2.parent.mkdir(exist_ok=True)

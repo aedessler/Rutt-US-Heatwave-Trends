@@ -165,7 +165,13 @@ BV = _da.values[_bs].reshape(int(_bs.sum()), -1)
 BYR, BMO, BDY = _bt.year.values[_bs], _bt.month.values[_bs], _bt.day.values[_bs]
 _blast = _bt[-1]
 _ds.close()
-PARTIAL = [] if (_blast.month == 12 and _blast.day == 31) else [int(_blast.year)]
+# Every year the Berkeley release does not cover in full. Its last year is
+# partial whenever the file does not end on 31 December, and once the record
+# runs past that year the remaining ones are absent from the file entirely --
+# which the record kernel would otherwise score as a hard ZERO rather than as
+# missing, dragging the line to the floor. Both cases are blanked below.
+_blast_full = int(_blast.year) - (0 if (_blast.month == 12 and _blast.day == 31) else 1)
+PARTIAL = [int(y) for y in YEARS_F3 if y > _blast_full]
 
 _bfrac = conus_cell_fraction(BLAT, BLON, "berkeley").ravel()
 _bny, _bfr = coverage(BV, BYR)
@@ -427,12 +433,11 @@ print(f"wrote {SERIES_FP}")
 #
 #   solid     homogenised / bias-corrected     USHCN-BC, Berkeley Earth
 #   dot-dash  UNCORRECTED station data         USHCN-Daily
-#   dashed    re-sampled onto another network  Berkeley Earth at GHCN Stations
+#   dashed    re-sampled onto another network  Berkeley Earth at USHCN Stations
 #
 # Note the colour change against the overlay figure: the re-sampled Berkeley
-# line is the DARKER green here, not the same green as the full grid, which is
+# line is a DARKER green here, not the same green as the full grid, which is
 # Figure 6's fix for two heavy lines of one colour merging wherever they cross.
-# It only matters in the last panel, where both re-samplings are drawn together.
 PANEL_W_F3, PANEL_H_F3 = 5.6, 3.25
 PANEL_YLIM_F3 = (0, 6)           # as the overlay figure: the 1930s spikes clip
 PANEL_OVERLAY = False            # True spends the spare slot on all of them together
@@ -454,13 +459,12 @@ PANELS = [
                      ("USHCN-BC × BE/BE-at-USHCN", ushcn_bc_full,
                       C_CORR_F3, LS_CORR_F3, False)]),
     ("Berkeley Earth", [("Berkeley Earth", berkeley, COL_BE_F3, "-", True)]),
-    # both re-samplings share a panel, so the reader sees what changes when the
-    # SAME Berkeley field is read at one network's sites rather than the other's
-    ("Berkeley Earth at Station Sites",
-                    [("Berkeley Earth at GHCN Stations", be_at,
-                      C_SAMPLED_F3, LS_SAMP_GH, True),
-                     ("Berkeley Earth at USHCN Stations", be_at_uh,
-                      C_SAMP_UH_F3, LS_SAMP_UH, False)]),
+    # ("Berkeley Earth at GHCN Stations", be_at, C_SAMPLED_F3, LS_SAMP_GH, True)
+    # removed from this panel; be_at is still computed above and carried in
+    # SER/NU for the console CHECK and TRENDS tables and the CSV.
+    ("Berkeley Earth at USHCN Stations",
+                    [("Berkeley Earth at USHCN Stations", be_at_uh,
+                      C_SAMP_UH_F3, LS_SAMP_UH, True)]),
 ]
 OVERLAY = [ln for _t, lns in PANELS for ln in lns]
 N_PANELS = len(PANELS) + (1 if PANEL_OVERLAY else 0)

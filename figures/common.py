@@ -115,7 +115,10 @@ def nclimdiv_file(elem):
                       NCLIMDIV_DIR / f"climdiv-{stem}-v1.0.0")
 
 USHCN_DIR          = _pick(ROOT / "USHCN_v2.5")
-USHCN_OFFSETS_FP   = USHCN_DIR / "derived" / "ushcn_offsets_1900_2024.nc"
+# the offsets carry their year span in the name, so the newest one wins rather
+# than the span being pinned here. build_derived.py writes them.
+USHCN_OFFSETS_FP   = _pick_glob(USHCN_DIR / "derived", "ushcn_offsets_*.nc",
+                                USHCN_DIR / "derived" / "ushcn_offsets_1900_2024.nc")
 USHCN_CROSSWALK_FP = USHCN_DIR / "derived" / "ushcn_crosswalk.csv"
 USHCN_STATIONS_TXT = USHCN_DIR / "ushcn-v2.5-stations.txt"
 
@@ -125,7 +128,7 @@ USREG_FP = Path(os.environ.get("HEATWAVE_USREG",
 
 # -- built by prepare_data.py --------------------------------------------------
 BAND_LAT_PREP    = (24.0, 50.0)   # the widest station domain any figure needs
-Y0_PREP, Y1_PREP = 1900, 2024
+Y0_PREP, Y1_PREP = 1900, 2026
 
 GHCND_GLOBAL      = _pick(DATA / "ghcnd_band", GHCND_DIR / "Global")
 GHCND_GLOBAL_GRID = _pick(DATA / "ghcnd_global_grid", GHCND_DIR / "Global_Gridded")
@@ -494,8 +497,12 @@ def grid_station_field(sm, gridder, years):
                         coords=dict(time=time, lat=gridder.lat, lon=gridder.lon))
 
 def ghcnd_station_months(years):
-    """One pass over the yearly GHCN-Daily parquets -> CONUS station-months."""
-    fp = CACHE_ANOM / "ghcnd_conus_station_months.parquet"
+    """One pass over the yearly GHCN-Daily parquets -> CONUS station-months.
+
+    The span is in the filename: the table is built by looping over it, so a
+    cache from a shorter record must not be handed back silently -- that is how
+    an extended record quietly keeps ending at the old last year."""
+    fp = CACHE_ANOM / f"ghcnd_conus_station_months_{years[0]}_{years[-1]}.parquet"
     if fp.exists():
         return pd.read_parquet(fp)
     parts = []
@@ -651,18 +658,21 @@ def check_gridded():
 # order. Here it is one function, so figure3.py and figure6.py can each be run
 # on its own; the cache paths are unchanged, so an existing cache is reused.
 # ══════════════════════════════════════════════════════════════════════════════
-Y0_F3, Y1_F3 = 1900, 2024
+Y0_F3, Y1_F3 = 1900, 2025
 MONTHS   = [5, 6, 7, 8, 9]
 NDAYS    = 153
 YEARS_F3 = np.arange(Y0_F3, Y1_F3 + 1)
 MIN_YEARS, MIN_FRAC = 100, 0.80
 TMAX_BOUNDS_F3 = (-40.0, 57.0)      # degC; 56.7 is the highest reliable US reading
 FORCE_F3 = False
-TAG_F3   = f"y{MIN_YEARS}_f{MIN_FRAC:g}_b{TMAX_BOUNDS_F3[0]:g}-{TMAX_BOUNDS_F3[1]:g}"
+# the year span belongs in the tag: the cube, the coverage table and the record
+# counts are all built over it, so extending the record has to miss the cache.
+TAG_F3   = (f"y{MIN_YEARS}_f{MIN_FRAC:g}_b{TMAX_BOUNDS_F3[0]:g}-"
+            f"{TMAX_BOUNDS_F3[1]:g}_{Y0_F3}-{Y1_F3}")
 COV_FP   = CACHE_REC / f"ghcnd_coverage_mjjas_conus_{TAG_F3}.parquet"
 DAILY_FP = CACHE_REC / f"ghcnd_daily_mjjas_conus_{TAG_F3}.npz"
 
-# the canonical May-September calendar: 125 years x 153 days = 19,125 rows
+# the canonical May-September calendar: len(YEARS_F3) years x 153 days
 _t = pd.date_range(f"{Y0_F3}-01-01", f"{Y1_F3}-12-31", freq="D")
 _t = _t[np.isin(_t.month, MONTHS)]
 KEYS = (_t.year * 10000 + _t.month * 100 + _t.day).to_numpy(np.int64)
@@ -776,7 +786,7 @@ BAND_COV_FP = CACHE_REC / "global" / f"ghcnd_band_coverage_mjjas_{TAG_F3}.parque
 _BAND_CUBE  = CACHE_REC / "global" / "ghcnd_band_mjjas"     # + _{screen}.npy
 
 def ghcnd_band_cube(min_total_days=0, min_good_years=0, min_days_in_year=0):
-    """(IDS, V, POS) for the 24-50N band: V is (19125, n_stn) float32 of MJJAS
+    """(IDS, V, POS) for the 24-50N band: V is (len(KEYS), n_stn) float32 of MJJAS
     TMAX in degC, POS a lat/lon frame indexed by station id.
 
     The screen is the caller's, because what may be discarded depends on the

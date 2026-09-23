@@ -6,13 +6,14 @@ can be produced on its own.
 | Script | Paper figure | Notebook section |
 | --- | --- | --- |
 | `figure1.py` | Figure 1 — CONUS JJA anomalies, TMAX/TMIN/TAVG, eight datasets | 5 |
-| `figure2.py` | Figure 2 — seasonal bars, DJF–SON by element | 6 |
+| `figure2.py` | Figure 2 — JJA bars by element | 6 |
 | `figure3.py` | Figure 3 — CONUS daily TMAX record frequency (two layouts) | 7 |
 | `figure4.py` | Figure 4 — Berkeley Earth exceedance maps, 24–50°N | 8 |
 | `figure5.py` | Figure 5 — northern mid-latitude band, JJA | 9 |
 | `figure6.py` | Figure 6 — heat-wave days, CONUS vs. the global strip | 10 |
 | `common.py` | not a figure: paths and the shared machinery | 1–4 |
 | `prepare_data.py` | not a figure: builds the inputs the archive does not carry | — |
+| `build_derived.py` | not a figure: rebuilds the two archive-level derived products, which is what lets the record move past 2024 | — |
 
 Figure S1 of the paper is not in the notebook and so has no script here.
 
@@ -113,7 +114,7 @@ About 600 MB and 10–30 minutes, mostly waiting on the network share.
 
 **2. `ushcn_daily_homog/` — the USHCN daily raw / bias-corrected pair.**
 *This is a reconstruction, not a copy.* The archive has USHCN v2.5 **monthly**
-raw and FLs.52j, and their difference as `ushcn_offsets_1900_2024.nc`; it has
+raw and FLs.52j, and their difference as `ushcn_offsets_<y0>_<y1>.nc`; it has
 no daily adjusted product. The pair is rebuilt by taking each USHCN station's
 daily GHCN-Daily values as the raw leg and adding that station-month's monthly
 offset to get the adjusted leg. A day counts only if the raw value and that
@@ -129,10 +130,179 @@ drive. It is rebuilt from (1) by averaging stations within each 2° cell over
 24–50°N. The heat-wave thresholds are per-cell and taken from each cell's own
 record, so the grid's construction does not bias the comparison.
 
+### What `build_derived.py` builds
+
+`prepare_data.py` reads two things that are themselves derived, and the code
+that produced the copies sitting on the archive is not in this repository. That
+was a real dead end rather than an inconvenience: the raw ingredients for 2025
+were on the drive the whole time, but nothing here could turn them into the two
+files the pipeline actually opens, so the record could not leave 2024.
+
+Both rules below were recovered — the first from the cube's own netCDF
+attributes, the second partly from the offsets file's description and partly
+from the data — and both are checked rather than trusted. `--verify` rebuilds
+something that already exists and diffs it:
+
+```bash
+python figures/build_derived.py cube    --verify 2024
+python figures/build_derived.py offsets --verify
+```
+
+The cube reproduces the archived 2024 file exactly: same station axis, same
+missing pattern, `max|diff| = 0`. The offsets reproduce the archived 1900–2024
+file exactly: identical counts (1,552,798 / 1,520,135 / 1,472,453 finite
+station-months for TMAX / TMIN / TAVG), no cell present in one and not the
+other, agreement to float32 rounding.
+
+**`GHCND/station_daily/<year>.nc` — the QC'd CONUS daily cube.** The raw global
+`by_year/<year>.csv.gz` cut down to the CONUS station set under the rules the
+existing files record in their own attributes: a non-blank quality flag drops
+the row, the first observation of a station-day-element wins, values stay in
+GHCN's 0.1 °C integers, and the year is laid out on 366 leap-aligned slots with
+slot 59 always 29 February. The station axis is *not* re-derived. Every
+archived year shares one 18,128-station axis, so it is read off an existing file
+and reused — which is both simpler than reconstructing the original selection
+and the only way a new year stays aligned with the old ones. A station that
+first reports in a new year is therefore not added; with a 100-year
+completeness rule in front of it, nothing downstream would have used it.
+
+**`USHCN_v2.5/derived/ushcn_offsets_<y0>_<y1>.nc` — the homogenization
+offsets.** FLs.52j minus raw, per station/year/month, keyed by GHCN-Daily id
+through `ushcn_crosswalk.csv`, scaled to °C. One rule is written down nowhere
+and had to be recovered from the data: **a month whose FLs.52j value carries
+measurement flag `E` is dropped.** `E` marks a value infilled from neighbours
+rather than an adjustment of the station's own observation, so the difference
+there is not a bias correction for that station's daily data. Keeping those
+months adds about 87,000 spurious offsets to TMAX alone and does not reproduce
+the archive. `common.py` resolves the newest `ushcn_offsets_*.nc` by glob, so a
+longer span supersedes a shorter one without an edit.
+
+### How far the record runs, and why
+
+It depends on the season the figure uses, because the datasets end at different
+dates. The archives were refreshed from source on 2026-09-20.
+
+| Figure | Season | Runs to | Why it stops there |
+| --- | --- | --- | --- |
+| 1 | JJA | **2026** | June–August 2026 is complete in GHCN-Daily, USHCN and nCLIMDIV |
+| 2 | JJA | 2025 | its bars are fixed years, so a 2026 bar would not be drawn |
+| 3, 6 | May–Sep | 2025 | September 2026 is not finished |
+| 5 | JJA | 2025 | ERA5 reaches JJA 2025; Berkeley, its other line, ends in 2024 |
+| 4 | — | 2024 | Berkeley-only |
+
+Only four datasets reach JJA 2026, so Figure 1's last point rests on nCLIMDIV,
+GHCN-Daily, USHCN-Daily and USHCN-BC alone:
+
+| Dataset | Ends | Reaches JJA 2026? |
+| --- | --- | --- |
+| GHCN-Daily (`by_year/2026.csv.gz`) | 2026-09-18 | yes |
+| USHCN monthly offsets | 2026-08 | yes, thinly |
+| nCLIMDIV (`-20260904`) | 2026-08 | yes |
+| CRUTEM5 | 2026-07 | no, one month short |
+| ERA5 | 2025-12 | no — not on the archive; a rebuild needs Copernicus |
+| NOAAGlobalTemp gridded | 2025-12 | no — NCEI has published no newer file |
+| Berkeley daily | 2024-08-31 | no |
+
+**The 2026 point is provisional.** USHCN's most recent months are still filling
+in — in the 2026-09-06 pull, June (three months old) had its usual ~710 stations
+while July had 611 and August 460, so a month needs roughly three months to
+settle. Figures 3 and 6 can take 2026 once September closes, in early October
+2026, but the same argument says a stable value wants until about December.
+
+### Refreshing USHCN moves the past, but not the answer
+
+USHCN v2.5 reruns its pairwise homogenization from scratch on every build, so a
+newer pull is not simply "the old file plus new months". Going from the
+2026-09-06 to the 2026-09-19 tarballs changed **64% of historical station-month
+offsets**, with a median shift of 0.03 °C and a maximum of 1.87 °C — PHA
+re-detecting breakpoints across the whole record.
+
+Almost all of it cancels in the average. The CONUS-mean TMAX adjustment moved
++0.004 °C in the 1930s and +0.004 °C over 2010–24, so the homogenization signal
+the paper reports — the difference between those two — moved by **0.0007 °C**.
+Figures 2, 3 and 6 came out numerically identical afterwards. Worth measuring
+again on the next refresh rather than assumed, but not a reason to avoid
+refreshing.
+
+Extending the record is not only a matter of the year constants, because several
+caches were keyed without a span and would have been handed back silently from
+the shorter record. `TAG_F3`, `TAG_F5`, Figure 1's IDW grids and ERA5 field, and
+the GHCN CONUS station-months table now all carry their year range in the cache
+name, so a change of span misses the cache instead of quietly truncating.
+
+**Berkeley Earth cannot follow.** Its daily release ends 2024-08-31: 2024 is
+partial and blanked, and 2025 is absent outright. In Figure 3 that mattered more
+than it looks — the record kernel counts, so a year with no data is not missing
+but a hard **zero**, which would have dropped the Berkeley lines to the floor in
+2025. Figure 3 now blanks every year past the last one Berkeley covers in full,
+not just the partial year. Figure 6's Berkeley series are keyed by year, so an
+absent year is simply not a key and needs nothing. Figure 4 is Berkeley-only and
+still ends in 2024.
+
+A dataset ending before the axis does also breaks the smoother, which is why
+Figures 1 and 5 now cut each series to its own last year before calling `roll`.
+`strict_interior` measures the end region from the end of the AXIS, so once the
+record ran to 2025 a series stopping in 2024 had its last real year treated as
+interior: it wanted a full 11-year window, reached into the empty year, and came
+out as a **hole five years short of its own end with a detached loclin segment
+after it** — clearly visible on Figure 5's Berkeley line and quietly present on
+Figure 1's. A mid-record hole is still a hole. Figure 3 was never affected: it
+runs `strict_interior` off, where every point is a local-linear fit and a
+trailing gap costs nothing.
+
+Figures 1 and 5 now trim the **head** the same way (`SMOOTH_FROM_RECORD_START`
+and `SMOOTH_FROM_RECORD_START_F1`, 2026-09-23). The leading edge had the
+mirror-image problem: ERA5's record starts in 1940 while the axis starts in
+1900, so 1940 sat forty points into the array, was treated as interior, and the
+orange line began at 1945 — five years of real data with no curve over them.
+Cutting each series to its own first valid year puts the local-linear fit where
+the record actually begins, and the ERA5 line starts at 1940 in both figures.
+
+ERA5 is the only series in either figure that starts after the axis does, and
+none of them carry interior gaps, so nothing else moved: Figure 1's annual CSV
+is byte-identical across the change, and no smoothed value that existed before
+changed by any amount. The new segment is worth looking at rather than skipping
+over — ERA5's CONUS JJA TMAX over 1940–1945 sits roughly 1 °C below every
+station-based dataset on the same panel, which is the largest disagreement
+anywhere on Figure 1.
+
+### Figure 5 averages all band land
+
+Figure 5 used to draw Berkeley on the GHCN-Daily footprint: a 2° cell counted
+only where **both** datasets reported it, and CONUS was randomly thinned each
+year to the rest-of-band cell count so the United States could not dominate.
+That made the station network, not the band, decide which cells entered the
+average. It has been removed (2026-09-23). Both lines are now plain
+cos(lat)-weighted means over **all land in 24–50°N**, on each dataset's own
+native grid — Berkeley at 1°, ERA5 at 0.25° — with no co-sampling, no CONUS
+thinning and no GHCN-Daily input at all.
+
+Averaging natively rather than on the old 2° common grid matters little (0.01 °C
+on the 1930s mean), because the 2° step gave a box that was one quarter land the
+same weight as one that was all land. Dropping the co-sample matters a great
+deal. Berkeley TMAX over 1930–1939 falls from **+0.57 °C to +0.19 °C**, while
+2010–2024 barely moves, +1.23 to +1.27 °C: the old footprint was weighted toward
+the United States, where the 1930s were exceptionally hot, so it carried a
+Dust Bowl signal that the band as a whole does not have.
+
+**ERA5 is now land-masked too.** It was previously a land+ocean band mean, which
+is not comparable to a land-only record. Berkeley's daily TMAX/TMIN product
+carries no data at all off its own `land_mask`, so that mask *is* Berkeley's
+footprint, and it is carried onto ERA5's 0.25° grid by nearest cell centre
+rather than a second, independent coastline being introduced. The two curves
+then cover identical geography, and they agree: over their common 1940–2024
+period, TMAX correlates at 0.979 with a +0.04 °C mean offset and a 0.13 °C RMS
+difference.
+
+Berkeley's coverage of the band's land area is reported per decade when the
+script runs — 71% in the 1900s, 85% in the 1930s, 97.6% from the 1960s on — so
+the part of the early record that rests on partial coverage is visible rather
+than assumed. ERA5 covers 100% of that footprint from 1940.
+
 ## What changed from the notebook
 
-Figure 3 aside — see below — the figure code is the notebook's, line for line,
-and the differences are all outside the computation:
+Figures 2 and 3 aside — see below — the figure code is the notebook's, line for
+line, and the differences are all outside the computation:
 
 1. **Sections 1–4 live in `common.py`** and each script does `from common
    import *`.
@@ -272,6 +442,17 @@ record. The masks, the Figure-3 cube and the USHCN pivots are *data*, not method
 and are deliberately not invalidated — wiping the cache directory on a method
 change would cost a multi-hour rebuild for nothing.
 
+### Figure 2 draws JJA only
+
+`figure2.py` is no longer section 6's full DJF/MAM/JJA/SON grid. The notebook
+was left alone deliberately, so running it still gives the original four-season
+figure. The script instead builds one panel per element (TMAX/TMIN/TAVG),
+JJA only, and suppresses the GHCN-Daily and Berkeley-at-USHCN ("BE @ USHCN")
+bars from the plot -- both series are still computed and appear in the
+script's CHECK table and CSV output, they are just not drawn. The dataset-name
+labels under each bar group sit on a single row rather than the notebook's
+two-tier staggered layout, since JJA's smaller bar groups no longer need it.
+
 ### Figure 3 has diverged
 
 `figure3.py` is no longer section 7. The notebook was left alone deliberately,
@@ -292,16 +473,18 @@ lives. Run the notebook and you get the original figure. What the script adds:
    there is one implementation rather than one per script. Those two pass
    `strict_interior=True`, which keeps the plain full-window rule inside the
    record and applies the local linear fit only at the record's own ends: a gap
-   stays a gap, so ERA5, whose record starts in 1940, still has no smoothed
-   value before 1945 rather than a six-point line drawn through the boundary.
+   stays a gap rather than having a six-point line drawn through the boundary.
+   What counts as "the record's own ends" depends on the series being trimmed to
+   its own first and last valid year first — see *Smoothing to the ends of the
+   record* above.
 2. **The endpoint's uncertainty is reported rather than asserted.**
    `end_uncertainty()` truncates a series at every year, smooths the
    truncation, and scores its estimate against the centered mean the full record
    eventually reports there. That RMSE — 0.6 to 0.8 records/yr at the last
    year, about 0.3 two years in — is printed as a table. It is no longer drawn:
    `END_SHADE` and `END_BAND` are both off, so the panels carry the smoothed
-   line alone, and Figure 5's co-sample spread is likewise printed rather than
-   shaded.
+   line alone. Figure 5 no longer has a co-sample spread to report: its two
+   lines are now plain land averages (see *Figure 5 averages all band land*).
 3. **Berkeley read at the USHCN sites**, built like the existing GHCN version:
    one unit per station at its Berkeley cell, duplicates kept so the line
    carries the network's density and not merely its footprint, on the 671

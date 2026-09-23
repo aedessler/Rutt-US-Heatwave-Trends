@@ -7,6 +7,7 @@ matplotlib
 # file formats
 netCDF4
 pyarrow
+python-docx        # figures/table2.py writes the Word table
 # geometry / maps (CONUS polygon, Natural Earth shapefiles)
 shapely
 geopandas

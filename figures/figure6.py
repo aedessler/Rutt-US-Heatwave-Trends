@@ -26,7 +26,7 @@ CACHE_HW.mkdir(exist_ok=True)
 F3_TAG      = TAG_F3            # same cube, same cache, as notebook section 7
 F3_DAILY_FP = DAILY_FP
 
-UH_YR0, UH_YR1 = 1900, 2024
+UH_YR0, UH_YR1 = 1900, 2025
 UH_LAT_BNDS, UH_LON_BNDS = (24.0, 50.0), (-130.0, -60.0)
 USHCN_LEGS = ("raw", "adj")
 
@@ -95,7 +95,7 @@ GHCND_UNCORR_ROWS = (0, 1)
 #             "smoothed" -- scale to the smoothed curves, ~35% taller, and hide
 #                           the annual traces so that nothing is clipped
 PANEL_W, PANEL_H = 5.6, 3.25
-YLIM_FROM        = "smoothed"
+YLIM_FROM        = "annual"        # 2026-09-21 request: draw the thin annual traces
 SHOW_ANNUAL_F6      = (YLIM_FROM == "annual")
 LW_SMOOTH, LW_ANNUAL, ALPHA_ANNUAL = 2.5, 0.55, 0.26      # (W2)
 
@@ -151,7 +151,7 @@ _HW_MON, _N_DOY = {5, 6, 7, 8, 9}, 153
 # another, so the switches are in the filename. Same idea as common.TAG_F3.
 _TAG_THR = (f"p{_PCTILE}r{_MIN_RUN}w{_WINDOW}n{MIN_THRESH_N}"
             f"_{'nr' if PCTILE_METHOD == 'nearest_rank' else 'lin'}"
-            f"{'ge' if EXCEED_INCLUSIVE else 'gt'}")
+            f"{'ge' if EXCEED_INCLUSIVE else 'gt'}_{UH_YR0}-{UH_YR1}")
 _TAG_STN = f"{_TAG_THR}_{'idw' if STATION_REDUCTION == 'idw_grid' else 'stnmean'}"
 
 def _tag_idw(radius_km):
@@ -634,7 +634,7 @@ def ld_ghcnd_conus_stations():
 
 def ld_era5_conus():
     files = [ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc"
-             for y in range(1940, 2025) for m in sorted(_HW_MON)
+             for y in range(1940, UH_YR1 + 1) for m in sorted(_HW_MON)
              if (ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc").exists()]
     ds = xr.open_mfdataset(sorted(files), combine="by_coords")
     lat_all = ds.latitude.values; lon_all = ds.longitude.values
@@ -726,7 +726,7 @@ def ld_ghcnd_global_stations():
 
 def ld_era5_global():
     files = [ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc"
-             for y in range(1940, 2025) for m in sorted(_HW_MON)
+             for y in range(1940, UH_YR1 + 1) for m in sorted(_HW_MON)
              if (ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc").exists()]
     ds = xr.open_mfdataset(sorted(files), combine="by_coords")
     lat_all = ds.latitude.values
@@ -1174,7 +1174,7 @@ def _pm_F6(d, y0, y1):
 # compared against a different footprint, not just a different climate.
 if COVERAGE:
     print("\nIDW coverage -- cos(lat) share of the masked domain carrying a value")
-    _eras = [(1900, 1929), (1930, 1939), (1940, 1969), (1970, 1999), (2000, 2024)]
+    _eras = [(1900, 1929), (1930, 1939), (1940, 1969), (1970, 1999), (2000, 2025)]
     print(f"  {'line':<30}" + "".join(f"{a}-{str(b)[2:]:>3}" for a, b in _eras))
     for _lbl, _cov in COVERAGE.items():
         _cells = [f"{_pm_F6(_cov, a, b):>8.2f}" for a, b in _eras]
@@ -1242,14 +1242,25 @@ def _smooth(d):
     s = s.reindex(range(int(s.index.min()), int(s.index.max()) + 1))
     return roll(s, strict_interior=True).dropna().to_dict()
 
-PLOT_YRS = (1900, 2024)
+PLOT_YRS = (1900, 2025)
 ROW_LABELS = ["CONUS", "Global 24–50°N"]
 ROW_DATA = [R_conus, R_global]
-COL_TITLES = {"Berkeley": "Berkeley Earth", "GHCND": "GHCN/USHCN",
+# (I10) GHCN-Daily suppressed from the plot -- 2026-09-20 request, following
+# the same convention Figures 1, 2, 3 and 5 already use: the dataset is still
+# fully computed (R_conus["GHCND"], R_global["GHCND"]) and still printed in the
+# CHECK, coverage and old-vs-new tables above; only its drawn line, its column
+# title, and the co-sampled Berkeley line built from its footprint are removed.
+# The top-row column keeps its two USHCN overlay lines and becomes, in effect,
+# a USHCN-only panel -- hence the retitle below. The bottom-row column had no
+# overlay of its own, so with the primary line gone it has nothing left to
+# draw; rather than show an empty box it is hidden outright.
+SUPPRESS_PRIMARY = {("GHCND", 0), ("GHCND", 1)}
+HIDDEN_PANELS     = {("GHCND", 1)}
+
+COL_TITLES = {"Berkeley": "Berkeley Earth", "GHCND": "USHCN",
               "USHCN": "USHCN", "ERA5": "ERA5"}
 EMPTY_NOTE = {("USHCN", 1): "CONUS-only network\n(no global coverage)"}
-PRIMARY_LABEL = {("GHCND", 0): "GHCN", ("GHCND", 1): "GHCN",
-                 ("USHCN", 0): "USHCN-BC", ("Berkeley", 0): "Berkeley Earth"}
+PRIMARY_LABEL = {("USHCN", 0): "USHCN-BC", ("Berkeley", 0): "Berkeley Earth"}
 # (A) uncorrected datasets are dot-dashed wherever they appear
 PRIMARY_LS = {("GHCND", r): LS_UNCORR for r in GHCND_UNCORR_ROWS}
 
@@ -1275,7 +1286,8 @@ def build_figure(datasets, overlays, out_name, extra_for_scale=None):
     extra_for_scale = extra_for_scale or {}
     def _row_ymax(R, row):
         """(W5) scale to the annual traces (v G) or to the smoothed curves."""
-        series = [R.get(dn, {}) for dn in datasets] + extra_for_scale.get(row, [])
+        series = ([R.get(dn, {}) for dn in datasets if (dn, row) not in SUPPRESS_PRIMARY]
+                 + extra_for_scale.get(row, []))
         if YLIM_FROM == "smoothed":
             series = [_smooth(d) for d in series]
         vals = [v for d in series for v in d.values() if not np.isnan(v)]
@@ -1286,12 +1298,20 @@ def build_figure(datasets, overlays, out_name, extra_for_scale=None):
     ncol = len(datasets)
     fig, axes = plt.subplots(2, ncol, figsize=(PANEL_W * ncol, PANEL_H * 2.28),
                              gridspec_kw={"hspace": 0.30, "wspace": 0.075})
+    _letters = "abcdefghijklmnopqrstuvwxyz"
+    _panel_i = 0                    # (I11) skips HIDDEN_PANELS, so the letters
+                                    # stay contiguous across the gap they leave
     for row, (row_label, R) in enumerate(zip(ROW_LABELS, ROW_DATA)):
         ymax = _row_ymax(R, row)
         for col in range(1, ncol):
             axes[row, col].sharey(axes[row, 0])
         for col, dn in enumerate(datasets):
-            ax = axes[row, col]; hw = R.get(dn, {}); ovl = overlays.get((dn, row), [])
+            ax = axes[row, col]
+            if (dn, row) in HIDDEN_PANELS:               # (I10)
+                ax.axis("off")
+                continue
+            hw = {} if (dn, row) in SUPPRESS_PRIMARY else R.get(dn, {})  # (I10)
+            ovl = overlays.get((dn, row), [])
             drew = _draw(ax, hw, C[dn], PRIMARY_LS.get((dn, row), LS_ADJ),
                          label=(PRIMARY_LABEL.get((dn, row), COL_TITLES[dn])
                                 if ovl else None))
@@ -1317,6 +1337,12 @@ def build_figure(datasets, overlays, out_name, extra_for_scale=None):
             ax.set_axisbelow(True)
             ax.axhline(0, color="0.6", lw=0.5, ls="--")
             ax.axvspan(1930, 1939, alpha=0.07, color="firebrick", zorder=0)
+            # (I11) panel letter, lower right -- clear of the legend (upper
+            # left) and of every curve here, whose Dust Bowl peak is the only
+            # thing that ever nears the bottom of a panel and sits mid-plot.
+            ax.text(0.97, 0.05, f"({_letters[_panel_i]})", transform=ax.transAxes,
+                    ha="right", va="bottom", fontsize=FS_COLTITLE, fontweight="bold")
+            _panel_i += 1
             if row == 0:
                 ax.set_title(COL_TITLES[dn], color="black", fontweight="bold",
                              pad=8, fontsize=FS_COLTITLE)
@@ -1339,22 +1365,16 @@ def build_figure(datasets, overlays, out_name, extra_for_scale=None):
 _USHCN_LINES = [(lab, s, C["USHCN"], ls) for lab, s, ls in
                 [("USHCN-Daily", R_ushcn_raw, LS_UNCORR),
                  ("USHCN-BC", R_ushcn_adj, LS_ADJ)] if s]
-# (B) the dashed green line lives in the Berkeley panel of the CONUS row only
-BE_AT_USHCN_THIN = False        # True to also draw its noisy annual trace
-_BE_LINES = ([("Berkeley, sampled as USHCN", _be_u, C_SAMPLED, LS_SAMPLED,
-               BE_AT_USHCN_THIN)] if _be_u else [])
-# (I9) the co-sampled line is a third Berkeley trace, so it stays in the
-# Berkeley hue and takes a third VALUE of it -- light against the mid-green of
-# the full grid and the dark green of the USHCN-sampled line -- plus a dotted
-# pattern, which reads as "a subset of" next to solid and long-dash.
-_BE_LINES += ([("Berkeley, on GHCN's cells", _be_c_gh, C_COSAMP, LS_COSAMP,
-                False)] if _be_c_gh else [])
-_BE_LINES_G = ([("Berkeley, on GHCN's cells", _be_g_gh, C_COSAMP, LS_COSAMP,
-                 False)] if _be_g_gh else [])
+# (I12) the Berkeley-sampled-as-USHCN line is removed from the top-left panel
+# -- 2026-09-20 request. _be_u is still computed above and still printed in
+# the CHECK/coverage tables (it is the numerator of the sampling-correction
+# ratio in the README); it just no longer has a line in this figure. With it
+# gone the Berkeley panel is a single trace, so it drops the legend box too,
+# the same as the ERA5 panels: the column title already says what it is.
+_BE_LINES, _BE_LINES_G = [], []
 
-_SCALE0 = ([o[1] for o in _USHCN_LINES] + ([_be_u] if _be_u else [])
-           + ([_be_c_gh] if _be_c_gh else []))
-_SCALE1 = [_be_g_gh] if _be_g_gh else []
+_SCALE0 = [o[1] for o in _USHCN_LINES]
+_SCALE1 = []
 
 # figure 1: USHCN rides in the GHCN panel
 _OVL_OVERLAY = {}

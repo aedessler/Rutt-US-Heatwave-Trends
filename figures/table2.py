@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Table 2 -- CONUS JJA temperature anomalies, the numbers Figure 2 drew as bars.
+"""Table 2 -- CONUS JJA temperature anomalies, the numbers the retired bar chart drew.
 
-Same anomaly-first pipeline and same QC as ``figure2.py``, but the record runs
+Same anomaly-first pipeline and same QC as the bar-chart script this table replaced
+(``figure2.py`` until the scripts were renumbered to match the paper on 2026-09-30;
+``git show 04e15c0:figures/figure2.py``), but the record runs
 to 2026 rather than 2025, GHCN-Daily and the USHCN-masked Berkeley leg are gone
-(Figure 2 computed both and plotted neither), and the summary is a table rather
+(the bar chart computed both and plotted neither), and the summary is a table rather
 than a bar chart:
 
     1934 | 1936 | 2024 | 2026 | 1930-1939 mean | 2017-2026 mean
@@ -37,7 +39,7 @@ CACHE_ANOM.mkdir(exist_ok=True)
 FIGD.mkdir(exist_ok=True)
 
 # ══ SETTINGS ════════════════════════════════════════════════════════════════
-YEARS_T   = np.arange(1900, 2027)      # one year past Figure 2: 2026 JJA is in
+YEARS_T   = np.arange(1900, 2027)      # one year past the bar chart: 2026 JJA is in
 SEASON_T  = (6, 7, 8)                  # JJA
 
 MIN_COV_FRAC_T   = 0.50    # season dropped if less than this share of CONUS reported
@@ -52,7 +54,7 @@ MODERN_START_T, MODERN_END_T = 2017, 2026
 UH_LABEL_RAW_T  = "USHCN-Daily"
 UH_LABEL_ADJ_T  = "USHCN-BC"
 
-# Figure 2 computed GHCN-Daily and the USHCN-masked Berkeley leg ("BE @ USHCN")
+# The bar chart computed GHCN-Daily and the USHCN-masked Berkeley leg ("BE @ USHCN")
 # but suppressed both from the plot; the table drops them outright.
 LABELS_T = {"berkeley": "Berkeley", "nclimdiv": "nCLIMDIV",
             "noaa": "NOAAGlobalTemp", "crutem5": "CRUTEM5",
@@ -64,7 +66,7 @@ ELEM_TITLES_T = {"tmax": "TMAX  -  daily maximum temperature",
                  "tmin": "TMIN  -  daily minimum temperature",
                  "tavg": "TAVG  -  daily mean temperature"}
 
-# ══ QC AND SERIES BUILDERS (Figure 2's, verbatim apart from the year span) ══
+# ══ QC AND SERIES BUILDERS (the bar chart's, verbatim apart from the year span) ══
 def _mad_filt_T(s, k=MAD_K_T):
     v = np.asarray(s.values, float)
     med = np.nanmedian(v); mad = np.nanmedian(np.abs(v-med))
@@ -104,7 +106,7 @@ def station_field_T(dataset, elem, gridder):
     return _cache(key, build)
 
 def berkeley_field_T(fp, elem):
-    """All 12 months of monthly means; Figure 2's ``field16_berkeley_*`` cache."""
+    """All 12 months of monthly means; the bar chart's ``field16_berkeley_*`` cache."""
     def build():
         ds = xr.open_dataset(str(fp))
         t = _std(ds["temperature"]).load(); ds.close()

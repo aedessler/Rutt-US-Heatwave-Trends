@@ -19,6 +19,8 @@ check_pipeline()
 print()
 check_gridded()
 print()
+check_smoother()
+print()
 
 # ══ SETTINGS AND HELPERS ════════════════════════════════════════════════
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -44,14 +46,6 @@ HOMOG_F1 = dict(era5=True, berkeley=True, nclimdiv=True, ghcnd=False,
                ushcn=False, ushcn_bc=True, noaa=True, crutem5=True)
 LS_HOMOG_F1, LS_RAW_F1 = "-", "-."
 LW_ANN_F1, LW_SM_F1, ALPHA_ANN_F1 = 0.9, 2.2, 0.28
-SMOOTH_FROM_RECORD_START_F1 = True   # loclin over a series' OWN first ROLL//2
-                                     # years, not the axis's. ERA5 starts in
-                                     # 1940, so its smooth starts in 1940 rather
-                                     # than 1945 (2026-09-23 request; Figure 5
-                                     # got the same change). Set False for the
-                                     # old behaviour. ERA5 is the only series
-                                     # here that starts after the axis does, so
-                                     # nothing else moves either way.
 STYLE_F1 = {"font.family": "serif",
            "font.serif": ["Times New Roman", "Times", "STIXGeneral", "DejaVu Serif"],
            "mathtext.fontset": "stix", "font.size": 14, "axes.titlesize": 18,
@@ -65,29 +59,6 @@ def gridded_series_F1(field, weights):
     m, frac = area_mean(cell_anomalies(field), weights)
     return (pd.Series(season_mean(_to_year_month(m, YEARS_F1), JJA_F1, YEARS_F1), index=YEARS_F1),
             pd.Series(season_mean(_to_year_month(frac, YEARS_F1), JJA_F1, YEARS_F1), index=YEARS_F1))
-
-def smooth_F1(s):
-    """The smoother Figures 1, 3 and 5 share: an 11-year centered mean with a
-    local-linear fit standing in over the outer ROLL//2 years at each end of the
-    record. strict_interior keeps the plain full-window rule everywhere else, so
-    a mid-record gap is still a gap rather than having a six-point line drawn
-    through it.
-
-    The series is cut to its OWN first and last year before smoothing. The end
-    region is otherwise measured from the ends of the AXIS, which runs to 2026
-    here, so a record that starts or stops elsewhere has its own edge years
-    treated as interior: they want a full 11-year window, it reaches into empty
-    years, and the curve comes out five years short of the data with a detached
-    loclin segment beyond it. Berkeley ends 2024-08-31 and needed the tail
-    trimmed; ERA5 starts in 1940 and needed the head trimmed, or its line began
-    in 1945 with five years of real data uncovered. ERA5 is the only series here
-    that starts after the axis does, so the head trim moves nothing else."""
-    first, last = s.first_valid_index(), s.last_valid_index()
-    if last is None:
-        return s
-    if not SMOOTH_FROM_RECORD_START_F1:
-        first = s.index[0]
-    return roll(s.loc[first:last], strict_interior=True).reindex(s.index)
 
 def station_series_F1(dataset, elem, weights05, gridder):
     """the whole station chain, cached at the gridded-field stage."""
@@ -230,11 +201,11 @@ for _k in PANEL_SETS_F1["tmax"]:
     _a, _y36, _b, _n = _stat_F1(_s)
     print(f"  {LABEL_F1[_k]:<14}{_a:>+8.2f}{_y36:>+8.2f}{_b:>+9.2f}{_n:>7}")
 _r, _a = S_F1[("ushcn", "tmax")], S_F1[("ushcn_bc", "tmax")]
-_d = smooth_F1(_a) - smooth_F1(_r)
-print(f"\nhomogenization signal (USHCN-BC minus USHCN-Daily, {ROLL}-yr line):"
+_d = lowess_smooth(_a) - lowess_smooth(_r)
+print(f"\nhomogenization signal (USHCN-BC minus USHCN-Daily, LOWESS line):"
       f"  1930s {_d.loc[1930:1939].mean():+.2f}   2010-24 {_d.loc[2010:2024].mean():+.2f}")
 print("published run: 1930s -0.06, 2010-24 +0.56 -- computed on ITS 10-yr window.\n"
-      "The 11-yr loclin line above reproduces both to ~0.01, so the homogenization\n"
+      "The LOWESS line above reproduces both to ~0.01, so the homogenization\n"
       "signal is a property of the data and not of the smoother.")
 print(f"\nsampled CONUS area fraction, JJA:  " + "   ".join(
     f"{_y}:{FRAC_F1[('ghcnd', 'tmax')].loc[_y]:.2f}" for _y in (1900, 1936, 1990, 2024)))
@@ -261,7 +232,7 @@ with mpl.rc_context(STYLE_F1):
                 continue
             ls = LS_HOMOG_F1 if HOMOG_F1[key] else LS_RAW_F1
             ax.plot(s.index, s.values, color=COL_F1[key], lw=LW_ANN_F1, alpha=ALPHA_ANN_F1)
-            ax.plot(s.index, smooth_F1(s).values, color=COL_F1[key], lw=LW_SM_F1,
+            ax.plot(s.index, lowess_smooth(s).values, color=COL_F1[key], lw=LW_SM_F1,
                     ls=ls, label=LABEL_F1[key])
         ax.axhline(0, color="0.2", lw=0.9, alpha=0.8, zorder=0)
         ax.set_title(title, loc="left", fontweight="bold", fontsize=17)

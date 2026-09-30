@@ -5,8 +5,8 @@
 things the notebook read are not on it in that form:
 
   (a) the GHCN-Daily yearly archive as `ghcn_global_YYYY.parquet`. The drive has
-      the raw by-year CSVs (global) and a QC'd CONUS-only daily cube. Figure 5
-      and Figure 6's global row need stations outside the United States, so the
+      the raw by-year CSVs (global) and a QC'd CONUS-only daily cube. Figure 4
+      and Figure 5's global row need stations outside the United States, so the
       archive is rebuilt from the raw CSVs, restricted to 24-50N (every
       longitude) -- the widest domain any figure asks for.
 
@@ -15,9 +15,9 @@ things the notebook read are not on it in that form:
       `ushcn_offsets_1900_2024.nc`. The daily pair is reconstructed by adding
       each station-month's offset to that station's daily GHCN-Daily values:
       the adjustment is then the only difference between the two legs, which is
-      exactly the invariant Figures 3 and 6 assert.
+      exactly the invariant Figures 2 and 5 assert.
 
-  (c) the 2-degree global gridded GHCN-Daily TMAX that Figure 6's bottom-row
+  (c) the 2-degree global gridded GHCN-Daily TMAX that Figure 5's bottom-row
       GHCN panel reads. Built from (a) by binning stations into 2-degree cells.
 
 Everything is written under HEATWAVE_WORK, is cached, and is skipped if it is
@@ -250,7 +250,7 @@ def build_ushcn(force=False):
         ta_r = np.where(ma, (tx_raw + tn_raw) / 2.0, np.nan)
         ta_a = np.where(ma, (tx_raw + tn_raw) / 2.0 + oa, np.nan)
 
-        # -- daily file, May-September, what Figures 3 and 6 read --
+        # -- daily file, May-September, what Figures 2 and 5 read --
         mj = np.isin(mo, (5, 6, 7, 8, 9)) & mx
         if mj.any():
             pd.DataFrame({
@@ -261,7 +261,7 @@ def build_ushcn(force=False):
                       compression="gzip")
             kept += 1
 
-        # -- monthly sums and counts, what Figures 1 and 2 read --
+        # -- monthly sums and counts, what Figure 1 and Table 2 read --
         g_df = pd.DataFrame({"year": yr, "month": mo,
                              "tmax_raw": tx_r, "tmax_adj": tx_a,
                              "tmin_raw": tn_r, "tmin_adj": tn_a,
@@ -288,8 +288,8 @@ def build_ushcn(force=False):
 
 
 def build_ushcn_pivots(force=False):
-    """The May-September raw/adjusted pivots. Figure 6 can build these itself,
-    but Figure 3 only reads them, so they are made here and neither figure has
+    """The May-September raw/adjusted pivots. Figure 5 can build these itself,
+    but Figure 2 only reads them, so they are made here and neither figure has
     to be run before the other."""
     mtag = "56789"
     fps = {leg: UH_PIV_DIR / f"ushcn_pair_tmax_pivot_m{mtag}_{leg}.parquet"
@@ -323,7 +323,7 @@ def build_ushcn_pivots(force=False):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# (c) the 2-degree global gridded GHCN-Daily TMAX (Figure 6, bottom row)
+# (c) the 2-degree global gridded GHCN-Daily TMAX (Figure 5, bottom row)
 # ══════════════════════════════════════════════════════════════════════════════
 GRID_DEG_PREP = 2.0
 
@@ -378,13 +378,13 @@ def build_grid(force=False):
 # prune the local staging copies
 # ══════════════════════════════════════════════════════════════════════════════
 # Two archive files are reopened on every run, because the figure code does not
-# cache what it reads from them: Figure 3 recomputes the Berkeley record counts
-# from the CONUS daily file, and Figure 4 reads a RAW decade file for its land
+# cache what it reads from them: Figure 2 recomputes the Berkeley record counts
+# from the CONUS daily file, and Figure 3 reads a RAW decade file for its land
 # mask and record span. Those are small, so they are kept by default.
 _STAGE_KEEP = (
-    "Berkeley_Earth/Processed/preprocessed_us_TMAX_data.nc",   # Figure 3
-    "Berkeley_Earth/RAW/Complete_TMAX_Daily_LatLong1_1900.nc",  # Figure 4
-    "Berkeley_Earth/RAW/Complete_TMAX_Daily_LatLong1_2020.nc",  # Figure 4
+    "Berkeley_Earth/Processed/preprocessed_us_TMAX_data.nc",   # Figure 2
+    "Berkeley_Earth/RAW/Complete_TMAX_Daily_LatLong1_1900.nc",  # Figure 3
+    "Berkeley_Earth/RAW/Complete_TMAX_Daily_LatLong1_2020.nc",  # Figure 3
 )
 
 
@@ -417,7 +417,7 @@ def prune_stage(keep_all=False, dry_run=False):
     kept = sum(f.stat().st_size for f in keep if f.exists())
     print(f"[prune] {'would free' if dry_run else 'freed'} "
           f"{freed / 1e9:.1f} GB across {removed:,} files; "
-          f"kept {kept / 1e6:.0f} MB that Figures 3 and 4 reread every run")
+          f"kept {kept / 1e6:.0f} MB that Figures 2 and 3 reread every run")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -432,7 +432,7 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--all", action="store_true",
                     help="prune: delete every staged file, including the few "
-                         "Figures 3 and 4 reread on every run")
+                         "Figures 2 and 3 reread on every run")
     ap.add_argument("--dry-run", action="store_true",
                     help="prune: report what would be deleted, delete nothing")
     a = ap.parse_args()

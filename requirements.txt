@@ -4,6 +4,7 @@ pandas
 xarray
 scipy
 matplotlib
+statsmodels        # figures/common.py: the LOWESS smoother
 # file formats
 netCDF4
 pyarrow

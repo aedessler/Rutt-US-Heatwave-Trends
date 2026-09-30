@@ -6,11 +6,11 @@ can be produced on its own.
 | Script | Paper figure | Notebook section |
 | --- | --- | --- |
 | `figure1.py` | Figure 1 — CONUS JJA anomalies, TMAX/TMIN/TAVG, eight datasets | 5 |
-| `figure2.py` | Figure 2 — JJA bars by element | 6 |
-| `figure3.py` | Figure 3 — CONUS daily TMAX record frequency (two layouts) | 7 |
-| `figure4.py` | Figure 4 — Berkeley Earth exceedance maps, 24–50°N | 8 |
-| `figure5.py` | Figure 5 — northern mid-latitude band, JJA | 9 |
-| `figure6.py` | Figure 6 — heat-wave days, CONUS vs. the global strip | 10 |
+| `table2.py` | Table 2 — CONUS JJA anomalies as a table (replaced the JJA bar chart that was Figure 2) | 6 |
+| `figure2.py` | Figure 2 — CONUS daily TMAX record frequency (panel layout) | 7 |
+| `figure3.py` | Figure 3 — Berkeley Earth exceedance maps, 24–50°N | 8 |
+| `figure4.py` | Figure 4 — northern mid-latitude band, JJA | 9 |
+| `figure5.py` | Figure 5 — heat-wave days, CONUS vs. the global strip | 10 |
 | `common.py` | not a figure: paths and the shared machinery | 1–4 |
 | `prepare_data.py` | not a figure: builds the inputs the archive does not carry | — |
 | `build_derived.py` | not a figure: rebuilds the two archive-level derived products, which is what lets the record move past 2024 | — |
@@ -33,8 +33,8 @@ python figures/figure1.py
 
 Each script runs top to bottom: shared checks, its own settings and helpers,
 build, its own `CHECK`, plot. It writes its PNG (and the CSV or PDF the
-notebook wrote) and prints the paths at the end. Unlike the notebook, Figure 6
-no longer needs Figure 3 to have been run first.
+notebook wrote) and prints the paths at the end. Unlike the notebook, Figure 5
+no longer needs Figure 2 to have been run first.
 
 The first run of a figure fills `_cache_*/` and is slow — minutes per dataset.
 Later runs read the cache in seconds.
@@ -48,7 +48,7 @@ falling back to the layout the notebook used. Override with:
 | --- | --- | --- |
 | `HEATWAVE_ROOT` | raw archive | `/Volumes/adessler_lab` |
 | `HEATWAVE_WORK` | caches, derived inputs, figure output | the repository root |
-| `HEATWAVE_USREG` | Christy CONUS mask (optional, Figure 6) | unset |
+| `HEATWAVE_USREG` | Christy CONUS mask (optional, Figure 5) | unset |
 | `HEATWAVE_SHOW=1` | draw interactively instead of headless | unset (`Agg`) |
 
 Every script starts by printing which inputs it can see, so a missing drive or
@@ -80,7 +80,7 @@ not Python's buffered `open`, which also fails on this share) and opened from
 there. The figure code is untouched — it still calls xarray exactly as the
 notebook did. Copies are kept, so later runs are much faster than the first.
 
-Budget roughly 30 GB for `_stage/`, most of it ERA5 for Figure 6. Set
+Budget roughly 30 GB for `_stage/`, most of it ERA5 for Figure 5. Set
 `HEATWAVE_STAGE=0` to read the archive in place, which is fine when the data
 are on a local disk.
 
@@ -91,7 +91,7 @@ space once the figures have run:
 python figures/prepare_data.py prune
 ```
 
-That frees about 20 GB and keeps the ~220 MB that Figures 3 and 4 reopen on
+That frees about 20 GB and keeps the ~220 MB that Figures 2 and 3 reopen on
 every run (neither caches what it reads from those two files). `--all` removes
 those too, `--dry-run` just reports. Pruning is always safe: staging is
 automatic, so anything deleted is copied back the next time something opens it.
@@ -104,7 +104,7 @@ under `$HEATWAVE_WORK/_data` and are skipped if already present.
 
 **1. `ghcnd_band/ghcn_global_YYYY.parquet` — the GHCN-Daily yearly archive.**
 The drive has the raw global by-year CSVs and a QC'd CONUS-only daily cube.
-Figure 5 and Figure 6's bottom row need stations outside the United States, so
+Figure 4 and Figure 5's bottom row need stations outside the United States, so
 the archive is rebuilt from the raw CSVs and restricted to 24–50°N at every
 longitude — the widest domain any figure asks for. QC is the archive's own
 documented rule, the same one its CONUS cube was built with: a non-blank
@@ -119,13 +119,13 @@ no daily adjusted product. The pair is rebuilt by taking each USHCN station's
 daily GHCN-Daily values as the raw leg and adding that station-month's monthly
 offset to get the adjusted leg. A day counts only if the raw value and that
 month's offset both exist, so the adjustment is the only difference between the
-legs — the invariant Figures 3 and 6 assert. The paper's own `ushcn_daily_homog`
+legs — the invariant Figures 2 and 5 assert. The paper's own `ushcn_daily_homog`
 was built by the original author and is not on this drive, so the USHCN-Daily
 and USHCN-BC lines are reproduced in method rather than bit-for-bit.
 Also writes the paired monthly table and the May–September pivots the figures read.
 
 **3. `ghcnd_global_grid/ghcn_grid_YYYY.nc` — 2° global gridded GHCN-Daily TMAX.**
-Figure 6's bottom-row GHCN panel reads a 2° gridded product that is not on the
+Figure 5's bottom-row GHCN panel reads a 2° gridded product that is not on the
 drive. It is rebuilt from (1) by averaging stations within each 2° cell over
 24–50°N. The heat-wave thresholds are per-cell and taken from each cell's own
 record, so the grid's construction does not bias the comparison.
@@ -185,10 +185,10 @@ dates. The archives were refreshed from source on 2026-09-20.
 | Figure | Season | Runs to | Why it stops there |
 | --- | --- | --- | --- |
 | 1 | JJA | **2026** | June–August 2026 is complete in GHCN-Daily, USHCN and nCLIMDIV |
-| 2 | JJA | 2025 | its bars are fixed years, so a 2026 bar would not be drawn |
-| 3, 6 | May–Sep | 2025 | September 2026 is not finished |
-| 5 | JJA | 2025 | ERA5 reaches JJA 2025; Berkeley, its other line, ends in 2024 |
-| 4 | — | 2024 | Berkeley-only |
+| Table 2 | JJA | **2026** | June–August 2026 is complete; a dataset that stops earlier is reported at its own last year |
+| 2, 5 | May–Sep | 2025 | September 2026 is not finished |
+| 3 | — | 2024 | Berkeley-only |
+| 4 | JJA | 2025 | ERA5 reaches JJA 2025; Berkeley, its other line, ends in 2024 |
 
 Only four datasets reach JJA 2026, so Figure 1's last point rests on nCLIMDIV,
 GHCN-Daily, USHCN-Daily and USHCN-BC alone:
@@ -206,7 +206,7 @@ GHCN-Daily, USHCN-Daily and USHCN-BC alone:
 **The 2026 point is provisional.** USHCN's most recent months are still filling
 in — in the 2026-09-06 pull, June (three months old) had its usual ~710 stations
 while July had 611 and August 460, so a month needs roughly three months to
-settle. Figures 3 and 6 can take 2026 once September closes, in early October
+settle. Figures 2 and 5 can take 2026 once September closes, in early October
 2026, but the same argument says a stable value wants until about December.
 
 ### Refreshing USHCN moves the past, but not the answer
@@ -220,55 +220,39 @@ re-detecting breakpoints across the whole record.
 Almost all of it cancels in the average. The CONUS-mean TMAX adjustment moved
 +0.004 °C in the 1930s and +0.004 °C over 2010–24, so the homogenization signal
 the paper reports — the difference between those two — moved by **0.0007 °C**.
-Figures 2, 3 and 6 came out numerically identical afterwards. Worth measuring
+The bar chart (now Table 2) and Figures 2 and 5 came out numerically
+identical afterwards. Worth measuring
 again on the next refresh rather than assumed, but not a reason to avoid
 refreshing.
 
 Extending the record is not only a matter of the year constants, because several
 caches were keyed without a span and would have been handed back silently from
-the shorter record. `TAG_F3`, `TAG_F5`, Figure 1's IDW grids and ERA5 field, and
+the shorter record. `TAG_F2`, `TAG_F4`, Figure 1's IDW grids and ERA5 field, and
 the GHCN CONUS station-months table now all carry their year range in the cache
 name, so a change of span misses the cache instead of quietly truncating.
 
 **Berkeley Earth cannot follow.** Its daily release ends 2024-08-31: 2024 is
-partial and blanked, and 2025 is absent outright. In Figure 3 that mattered more
+partial and blanked, and 2025 is absent outright. In Figure 2 that mattered more
 than it looks — the record kernel counts, so a year with no data is not missing
 but a hard **zero**, which would have dropped the Berkeley lines to the floor in
-2025. Figure 3 now blanks every year past the last one Berkeley covers in full,
-not just the partial year. Figure 6's Berkeley series are keyed by year, so an
-absent year is simply not a key and needs nothing. Figure 4 is Berkeley-only and
+2025. Figure 2 now blanks every year past the last one Berkeley covers in full,
+not just the partial year. Figure 5's Berkeley series are keyed by year, so an
+absent year is simply not a key and needs nothing. Figure 3 is Berkeley-only and
 still ends in 2024.
 
-A dataset ending before the axis does also breaks the smoother, which is why
-Figures 1 and 5 now cut each series to its own last year before calling `roll`.
-`strict_interior` measures the end region from the end of the AXIS, so once the
-record ran to 2025 a series stopping in 2024 had its last real year treated as
-interior: it wanted a full 11-year window, reached into the empty year, and came
-out as a **hole five years short of its own end with a detached loclin segment
-after it** — clearly visible on Figure 5's Berkeley line and quietly present on
-Figure 1's. A mid-record hole is still a hole. Figure 3 was never affected: it
-runs `strict_interior` off, where every point is a local-linear fit and a
-trailing gap costs nothing.
+**The smoother no longer cares where a record starts or stops.** The 11-year centered
+mean used until 2026-09-30 measured its end region from the ends of the *axis*, so a
+record stopping before the axis (Berkeley, 2024) or starting after it (ERA5, 1940)
+came out with a hole and a detached segment unless each series was first cut to its own
+first and last year. LOWESS smooths only the years a series has, so none of that
+handling exists any more; see *The smoother is LOWESS*. One thing on Figure 1 is worth
+looking at rather than skipping over: ERA5's CONUS JJA TMAX over 1940–1945 sits roughly
+1 °C below every station-based dataset on the same panel, which is the largest
+disagreement anywhere on Figure 1.
 
-Figures 1 and 5 now trim the **head** the same way (`SMOOTH_FROM_RECORD_START`
-and `SMOOTH_FROM_RECORD_START_F1`, 2026-09-23). The leading edge had the
-mirror-image problem: ERA5's record starts in 1940 while the axis starts in
-1900, so 1940 sat forty points into the array, was treated as interior, and the
-orange line began at 1945 — five years of real data with no curve over them.
-Cutting each series to its own first valid year puts the local-linear fit where
-the record actually begins, and the ERA5 line starts at 1940 in both figures.
+### Figure 4 averages all band land
 
-ERA5 is the only series in either figure that starts after the axis does, and
-none of them carry interior gaps, so nothing else moved: Figure 1's annual CSV
-is byte-identical across the change, and no smoothed value that existed before
-changed by any amount. The new segment is worth looking at rather than skipping
-over — ERA5's CONUS JJA TMAX over 1940–1945 sits roughly 1 °C below every
-station-based dataset on the same panel, which is the largest disagreement
-anywhere on Figure 1.
-
-### Figure 5 averages all band land
-
-Figure 5 used to draw Berkeley on the GHCN-Daily footprint: a 2° cell counted
+Figure 4 used to draw Berkeley on the GHCN-Daily footprint: a 2° cell counted
 only where **both** datasets reported it, and CONUS was randomly thinned each
 year to the rest-of-band cell count so the United States could not dominate.
 That made the station network, not the band, decide which cells entered the
@@ -301,8 +285,9 @@ than assumed. ERA5 covers 100% of that footprint from 1940.
 
 ## What changed from the notebook
 
-Figures 2 and 3 aside — see below — the figure code is the notebook's, line for
-line, and the differences are all outside the computation:
+Figure 2 aside, the smoother (next section) and Figure 5's heat-wave method
+(below), the figure code is the notebook's, line for line, and the differences are all
+outside the computation:
 
 1. **Sections 1–4 live in `common.py`** and each script does `from common
    import *`.
@@ -310,19 +295,57 @@ line, and the differences are all outside the computation:
    archive layout, and the nCLIMDIV / NOAAGlobalTemp filenames are globbed
    rather than pinned to one processing date.
 3. **The May–September GHCN-Daily station cube moved into `common.py`.** In the
-   notebook it was built by section 7 (Figure 3) and section 10 (Figure 6) read
+   notebook it was built by section 7 (Figure 2) and section 10 (Figure 5) read
    the `.npz` it left behind, so the notebook had to be run in order. It is now
    `ghcnd_daily_cube()`, cached at the same path, so either figure can run first.
    The USHCN May–September pivots moved to `prepare_data.py` for the same reason.
-4. **`figure6.py` draws the title the paper's copy of Figure 6 carries**
+4. **`figure5.py` draws the title the paper's copy of Figure 5 carries**
    ("CONUS VS Northern Mid-latitude Band Heatwave Days"); the notebook's plot
-   block drew no title. Set `SUPTITLE_F6 = None` for the bare panel grid.
-5. **Figure 6 writes to `PAPER_FIGURES_FINAL/`** like every other figure. The
+   block drew no title. Set `SUPTITLE_F5 = None` for the bare panel grid.
+5. **Figure 5 writes to `PAPER_FIGURES_FINAL/`** like every other figure. The
    notebook sent this one to the work directory instead.
 
-### Figure 6 now follows Christy's procedure
+### The smoother is LOWESS
 
-`figure6.py` claimed the Christy (2026) heat-wave method but departed from the
+Figures 1, 2, 4 and 5 draw one heavy smoothed line per series, and since 2026-09-30 it is
+LOWESS (`common.lowess_smooth`). It replaced an 11-year centered mean carried to the ends
+of each record by a shrinking local linear fit -- `roll()` with its `END_METHOD` options,
+`end_uncertainty()` and `end_band()`, all deleted from `common.py`. The notebook keeps its
+own copy.
+
+* **What it is.** At each year, a straight line fit by weighted least squares to the 17
+  nearest years (tricube weights), read at that year. `check_smoother()` runs at the top
+  of each of the four scripts and asserts it against a longhand implementation at every
+  year, that a straight line comes back exactly out to both ends, and that the line stops
+  where the data stop.
+* **The whole length.** Near an end all 17 nearest years lie on one side, so the window
+  slides instead of shrinking and there is no separate end rule. A record that starts in
+  1940 or stops in 2024 is smoothed over exactly those years, and nothing is drawn past
+  the data.
+* **17 years is the old smoothness.** The interior kernel has a standard deviation of
+  3.04 yr against 3.16 for the 11-year mean, and averages 11.3 effective observations
+  against 11. `LOWESS_YEARS` is the one knob.
+* **No robustness iterations** (`LOWESS_IT = 0`). statsmodels' default of 3 reads the
+  record-setting 1930s as outliers and lowered the Dust Bowl peak of Figure 2's smooths by
+  12 to 51%; `figure2.py` prints the comparison on every run.
+* **Holes are kept.** A year a series lacks is never bridged: each unbroken run of years is
+  smoothed on its own, and a run shorter than the window is left blank. No plotted series
+  has an interior gap today, so this matters only if one appears. The hole is the blank
+  year itself, not the 11-year hole the old smoother left around it.
+* **What moved.** Inside the records the two smoothers agree closely: the Dust Bowl peaks
+  moved by 0.1 or less. The ends differ. The old six-point endpoint fit hooked at the start
+  of each record; the 1900 values of Figure 1's lines are 0.3 to 0.6 °C lower than they were
+  and Figure 2's 0.5 to 0.6 records/yr lower. And the last smoothed value moves about 30%
+  less as later years arrive (`end_revision()`, printed by `figure2.py`).
+* **The last years are still extrapolation.** A local line carries a recent rise to the
+  endpoint, so the final smoothed value can sit well away from the final annual one --
+  Figure 5's ERA5 CONUS line ends at 8.2 heat-wave days/yr against an annual 3.7.
+  Sentences that read a value off the last few years of a smoothed line should be
+  re-read against the figure.
+
+### Figure 5 now follows Christy's procedure
+
+`figure5.py` claimed the Christy (2026) heat-wave method but departed from the
 reference implementation — `us_dly_waves.py`, a Python port of J.R. Christy's
 `us_dly_waves.f` — in four places. All four are now switches at the top of the
 script, marked `(I1)`–`(I5)`, so the old behaviour is one edit away and the
@@ -333,7 +356,7 @@ What was already identical, and is untouched: the May–September season and its
 edges, the ≥6-consecutive-day run rule with every day of a qualifying run
 counted, and the 70% valid-day gate on a station-year. `_PCTILE = 90` and
 `_MIN_RUN = 6` also stay; Christy's script is driven by `--percentile` /
-`--min-run` and his own example is 95/3, but Figure 6 keeps its published 90/6.
+`--min-run` and his own example is 95/3, but Figure 5 keeps its published 90/6.
 
 1. **The spatial reduction, and the one that matters.** Christy counts wave days
    at each station, IDW-interpolates *the counts* onto a grid, and then takes a
@@ -438,53 +461,54 @@ rather than inferred.
 produced it**, because (2)–(4) reach the gridded lines as well and a figure drawn
 half from old pickles and half from new ones would look entirely plausible. The
 old filenames can never be matched, so they survive on disk as the previous
-record. The masks, the Figure-3 cube and the USHCN pivots are *data*, not method,
+record. The masks, the Figure-2 cube and the USHCN pivots are *data*, not method,
 and are deliberately not invalidated — wiping the cache directory on a method
 change would cost a multi-hour rebuild for nothing.
 
-### Figure 2 draws JJA only
+### The old Figure 2 is now Table 2
 
-`figure2.py` is no longer section 6's full DJF/MAM/JJA/SON grid. The notebook
-was left alone deliberately, so running it still gives the original four-season
-figure. The script instead builds one panel per element (TMAX/TMIN/TAVG),
-JJA only, and suppresses the GHCN-Daily and Berkeley-at-USHCN ("BE @ USHCN")
-bars from the plot -- both series are still computed and appear in the
-script's CHECK table and CSV output, they are just not drawn. The dataset-name
-labels under each bar group sit on a single row rather than the notebook's
-two-tier staggered layout, since JJA's smaller bar groups no longer need it.
+The paper replaced its Figure 2 -- the JJA bar chart -- with a table, and every later figure
+moved down one number; the code followed on 2026-09-30. `figure2.py`, the bar-chart script (itself already cut
+down from the notebook's four-season DJF/MAM/JJA/SON grid to JJA only), is deleted; the name
+now belongs to the record-count script that used to be `figure3.py`. The last commit that
+has the old script is `04e15c0`: `git show 04e15c0:figures/figure2.py`.
 
-### Figure 3 has diverged
+Its numbers live on in `table2.py`: the same anomaly-first pipeline and QC, copied verbatim
+apart from the year span, which now runs to 2026 instead of 2025. GHCN-Daily and
+Berkeley-at-USHCN are dropped outright -- the bar chart computed both and plotted neither.
 
-`figure3.py` is no longer section 7. The notebook was left alone deliberately,
+| Was | Is | Script | Notebook section |
+| --- | --- | --- | --- |
+| Figure 2, JJA bars | Table 2 | `table2.py` | 6 |
+| Figure 3, record counts | Figure 2 | `figure2.py` | 7 |
+| Figure 4, exceedance maps | Figure 3 | `figure3.py` | 8 |
+| Figure 5, band anomalies | Figure 4 | `figure4.py` | 9 |
+| Figure 6, heat-wave days | Figure 5 | `figure5.py` | 10 |
+
+The notebook keeps its own sections and its old figure numbers, so its sections 7-10 draw what
+are now Figures 2-5 and section 6 has no script. Output files follow the new numbers
+(`Figure2.png` is the record counts), and so do the `_F*` suffixes in the code (`Y0_F2`,
+`TAG_F2`, ...).
+
+### Figure 2 has diverged
+
+`figure2.py` is no longer section 7. The notebook was left alone deliberately,
 so the two now differ in what they compute and not merely in where the code
 lives. Run the notebook and you get the original figure. What the script adds:
 
 1. **The smoothed line reaches both ends of the record.** The notebook's
    centered 11-year mean required a full window, so it stopped in 2019 — five
-   years short of the data. The script writes the same mean as an unweighted
-   local linear fit: identical in the interior, because the least-squares line
-   through a symmetric window read at its own center *is* that window's mean,
-   which the script asserts to machine precision, and carrying the local trend
-   to the endpoint over the outer five years at each end. `END_METHOD` also
-   offers a shrinking mean, Savitzky–Golay, Mann (2004) minimum-roughness
-   padding, and `none` for the notebook's behaviour.
-
-   This smoother now lives in `common.py` and Figures 1 and 5 use it too, so
-   there is one implementation rather than one per script. Those two pass
-   `strict_interior=True`, which keeps the plain full-window rule inside the
-   record and applies the local linear fit only at the record's own ends: a gap
-   stays a gap rather than having a six-point line drawn through the boundary.
-   What counts as "the record's own ends" depends on the series being trimmed to
-   its own first and last valid year first — see *Smoothing to the ends of the
-   record* above.
+   years short of the data. The script draws LOWESS, which is defined at every year
+   that has data: see *The smoother is LOWESS* above. (Until 2026-09-30 it drew the
+   same 11-year mean as an unweighted local linear fit, carrying the local trend to
+   the endpoint over the outer five years at each end.)
 2. **The endpoint's uncertainty is reported rather than asserted.**
-   `end_uncertainty()` truncates a series at every year, smooths the
-   truncation, and scores its estimate against the centered mean the full record
-   eventually reports there. That RMSE — 0.6 to 0.8 records/yr at the last
-   year, about 0.3 two years in — is printed as a table. It is no longer drawn:
-   `END_SHADE` and `END_BAND` are both off, so the panels carry the smoothed
-   line alone. Figure 5 no longer has a co-sample spread to report: its two
-   lines are now plain land averages (see *Figure 5 averages all band land*).
+   `end_revision()` cuts a series at every year, smooths the cut record, and scores
+   its value at the cut against the value the full record eventually gives that
+   year. That RMSE — 0.4 to 0.6 records/yr at the last year, 0.2 to 0.3 two years
+   in, exactly zero from the eighth year back — is printed as a table. It is not
+   drawn. Figure 4 no longer has a co-sample spread to report: its two lines are
+   now plain land averages (see *Figure 4 averages all band land*).
 3. **Berkeley read at the USHCN sites**, built like the existing GHCN version:
    one unit per station at its Berkeley cell, duplicates kept so the line
    carries the network's density and not merely its footprint, on the 671
@@ -493,24 +517,25 @@ lives. Run the notebook and you get the original figure. What the script adds:
 4. **A sampling correction for USHCN-BC.** Berkeley is the only dataset here
    that exists both on the full grid and on a station footprint, so their ratio
    is what sampling alone does to a record count with the climate held fixed:
-   0.795 in the 1930s, 1.293 over 2015–24. USHCN-BC multiplied through by it
-   goes from 3.12 to 2.48 in the 1930s and from 1.52 to 2.00 recently, taking
-   its Dust Bowl ratio from 2.05 to 1.24 against Berkeley's own 1.13. The factor
-   is taken from the smoothed Berkeley pair, not year by year: annually the
-   ratio runs 0.58 to 1.99 and its denominator falls to 0.057 records/yr.
-5. **A second layout.** `Fig3_panels_*` draws one series per panel in Figure 6's
-   `FigHW` style — wide panel grid, shared y, bold panel titles — alongside the
-   original single-axes `Fig3_final_*`. Both are drawn from the same computed
-   series, so they cannot drift apart. The output filenames now carry the
-   endpoint rule, so a run never overwrites a figure drawn with another one.
+   0.794 in the 1930s, 1.286 over 2015–24. USHCN-BC multiplied through by it
+   goes from 3.12 to 2.47 in the 1930s and from 1.51 to 1.98 recently, taking
+   its Dust Bowl ratio from 2.06 to 1.25 against Berkeley's own 1.13. The factor
+   is taken from the LOWESS-smoothed Berkeley pair, not year by year: annually the
+   ratio runs 0.58 to 2.00 and its denominator falls to 0.059 records/yr, against
+   0.76 to 1.38 for the smoothed pair.
+5. **A panel layout.** The figure is drawn one series per panel in Figure 5's
+   `FigHW` style — wide panel grid, shared y, bold panel titles — and written to
+   `Figure2.png`. The single-axes overlay that used to sit alongside it, switched
+   off in the code for some time, is deleted, together with the output-name suffix
+   that recorded the endpoint rule.
 
 Two columns in the printed table and the CSV are new: `Berkeley Earth at USHCN
 Stations` and `USHCN-BC × BE/BE-at-USHCN`. The second is a product rather than a
 record count, so it is the one column that does not integrate to 153.
 
-### A note on Figure 4
+### A note on Figure 3
 
-The script reproduces the paper's Figure 4 *caption*, which specifies a
+The script reproduces the paper's Figure 3 *caption*, which specifies a
 day-of-year 95th-percentile threshold "calculated over the full 1900-2024
 record" — that is what the notebook computes and what the script draws.
 

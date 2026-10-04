@@ -9,7 +9,7 @@ _cache_*/
 cache_*/
 
 # ── figure output ───────────────────────────────────────────────────────────
-PAPER_FIGURES_FINAL/
+PAPER_FIGURES_FINAL/*
 
 # ── data formats, wherever they land ────────────────────────────────────────
 *.nc
@@ -68,3 +68,7 @@ venv/
 .vscode/
 .idea/
 *.swp
+
+# ── the one exception: the master annual table every figure is plotted from, kept so the
+# numbers behind the figures are in the repository (must come after the *.csv rule above)
+!PAPER_FIGURES_FINAL/master_annual_table.csv

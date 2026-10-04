@@ -635,9 +635,9 @@ def ld_ghcnd_conus_stations():
             pos["lon"].values.astype(np.float64))      # (I4) lon, for the IDW
 
 def ld_era5_conus():
-    files = [ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc"
+    files = [stage(era5_file(y, m))
              for y in range(1940, UH_YR1 + 1) for m in sorted(_HW_MON)
-             if (ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc").exists()]
+             if era5_file(y, m).exists()]
     ds = xr.open_mfdataset(sorted(files), combine="by_coords")
     lat_all = ds.latitude.values; lon_all = ds.longitude.values
     lat_ok = (lat_all >= 23) & (lat_all <= 51)             # (8) subset first
@@ -727,9 +727,9 @@ def ld_ghcnd_global_stations():
             pos["lon"].values.astype(np.float64))
 
 def ld_era5_global():
-    files = [ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc"
+    files = [stage(era5_file(y, m))
              for y in range(1940, UH_YR1 + 1) for m in sorted(_HW_MON)
-             if (ERA5_DIR / f"era5_2t_{y:04d}{m:02d}_daily.nc").exists()]
+             if era5_file(y, m).exists()]
     ds = xr.open_mfdataset(sorted(files), combine="by_coords")
     lat_all = ds.latitude.values
     keep = np.where((lat_all >= 23) & (lat_all <= 51))[0][::4]   # (8)

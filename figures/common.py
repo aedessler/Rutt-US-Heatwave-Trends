@@ -101,7 +101,15 @@ BE_TMAX      = BE_PROC / "preprocessed_us_TMAX_data.nc"
 BE_TMIN      = BE_PROC / "preprocessed_us_TMIN_data.nc"
 BE_TAVG      = BE_PROC / "preprocessed_us_TAVG_data.nc"   # optional; read by table2.py
 
-ERA5_DIR     = _pick(ROOT / "ERA5")
+# Daily max/min/mean over LOCAL-time days (local midnight to midnight, UTC + round(lon/15) h),
+# built by download_era5_2t_full_LT.py. The UTC-day files now sit in ERA5/ERA5_no_local_time.
+ERA5_DIR     = _pick(ROOT / "ERA5" / "ERA5_LT", ROOT / "ERA5")
+
+
+def era5_file(year, month):
+    """One month of ERA5 local-time daily t2m_max / t2m_min / t2m_mean."""
+    return ERA5_DIR / f"era5_2t_LT_{year:04d}{month:02d}_daily.nc"
+
 NOAA_DIR     = _pick(ROOT / "NOAAGlobalTemp", ROOT / "noaaglobaltemp")
 NOAA_FP      = _pick_glob(NOAA_DIR, "NOAAGlobalTemp_v6.0.0_gridded_*.nc",
                           NOAA_DIR / "NOAAGlobalTemp_v6.0.0_gridded.nc")
@@ -1045,7 +1053,7 @@ __all__ = [
     "GHCND_DIR", "GHCND_BY_YEAR", "GHCND_STATION_DAILY", "GHCND_INV",
     "GHCND_STATIONS_TXT", "GHCND_GLOBAL", "GHCND_GLOBAL_GRID",
     "BE_DIR", "BE_PROC", "BE_RAW", "BE_TMAX", "BE_TMIN", "BE_TAVG",
-    "ERA5_DIR", "NOAA_DIR", "NOAA_FP", "CRUTEM_DIR", "CRUTEM_FP",
+    "ERA5_DIR", "era5_file", "NOAA_DIR", "NOAA_FP", "CRUTEM_DIR", "CRUTEM_FP",
     "NCLIMDIV_DIR", "nclimdiv_file",
     "USHCN_DIR", "USHCN_OFFSETS_FP", "USHCN_CROSSWALK_FP", "USHCN_STATIONS_TXT",
     "USREG_FP", "UH_PAIRED", "UH_PIV_DIR", "UH_WORKDIR", "UH_STN_FP",

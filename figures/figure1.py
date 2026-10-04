@@ -91,13 +91,13 @@ def era5_field_F1(varname, elem):
         parts, missing, failed = [], [], []
         for y in range(ERA5_Y0_F1, ERA5_Y1_F1 + 1):
             for mo in JJA_F1:
-                fp = ERA5_DIR / f"era5_2t_{y}{mo:02d}_daily.nc"
+                fp = era5_file(y, mo)
                 if not fp.exists():
                     missing.append(f"{y}-{mo:02d}")
                     continue
                 ds = None
                 try:
-                    ds = xr.open_dataset(str(fp))
+                    ds = xr.open_dataset(str(stage(fp)))
                     da = _std(ds[varname])
                     da = da.assign_coords(lon=((da["lon"] + 180) % 360) - 180).sortby("lon")
                     da = da.sel(lat=slice(BOX["lat_max"], BOX["lat_min"])

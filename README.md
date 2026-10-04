@@ -9,6 +9,7 @@ U.S. heatwave trends, comparing the 1930s Dust Bowl with the present day.
 | File               | Contents                                                                                                                                                                                                                                                                                                                                           |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `figures/`         | One script per figure — `figure1.py` … `figure5.py`, with `table2.py` for Table 2 — plus `common.py` (paths and shared machinery), `prepare_data.py` (builds the inputs the archive does not carry) and `build_derived.py` (rebuilds the two archive-level derived products, which is what extends the record past 2024). See `figures/README.md`. |
+| `nh_mid_latitude_20cr_localday.py` | Builds the 20CR local-time daily Tmax / Tmin / Tavg product for the 24-50N band on the archive (see "20CR local-time daily product"). Standalone: it does not import `figures/`. |
 | `requirements.txt` | Python packages.                                                                                                                                                                                                                                                                                                                                   |
 | `.gitignore`       | Keeps data, caches and generated figures out of the repository.                                                                                                                                                                                                                                                                                    |
 
@@ -128,6 +129,46 @@ churn very nearly cancels: the CONUS-mean adjustment moved about 0.004 °C, the
 homogenization signal the paper reports moved by 0.0007 °C, and the bar chart (now Table 2)
 and Figure 2 came out numerically identical. Worth re-checking whenever the archive is
 refreshed, not worth fearing.
+
+### 20CR local-time daily product (`NH_mid_latitude`)
+
+`nh_mid_latitude_20cr_localday.py` turns the 3-hourly 20CR 2 m temperature
+(`20CR/Daily/raw_full/air.2m.<year>.nc`, global 1 degree, UTC, 1900-2015) into daily
+statistics over each grid point's own **local midnight-to-midnight day**, for the band
+`LAT_BOX = (23.9, 50.1)` (the 1 degree rows 24-50N) at all longitudes. Output is one file
+per year in `20CR/Daily/NH_mid_latitude/` on the archive (3.6 GB for 1900-2015):
+`20cr_2m_LT_<year>_daily.nc`, 27 lats x 360 lons (0-359E), degC, holding
+
+| Variable           | Definition                                      |
+| ------------------ | ----------------------------------------------- |
+| `tmax`             | largest of the day's 8 samples                  |
+| `tmin`             | smallest of the 8 samples                       |
+| `tavg`             | mean of the 8 samples                           |
+| `tavg_minmax`      | (`tmax` + `tmin`) / 2                           |
+| `utc_offset_hours` | offset applied at each longitude (per-lon only) |
+
+- **Local time** is UTC + round(lon/15) h (longitude wrapped to [-180, 180), halves to
+the even hour), the same rule as the ERA5 local-time files and `figures/reanalysis.py`.
+- **Year and month boundaries.** A local day is 8 consecutive samples, so months need no
+special handling. A local Jan 1 east of 0 starts on UTC Dec 31 and a local Dec 31 west of
+0 ends on UTC Jan 1, so each year is built from the adjacent years' files too.
+- **Incomplete days are NaN**, never a statistic of fewer samples. Only the ends of the
+record lack a neighbour: 1900 local Jan 1 east of 37.5E and 2015 local Dec 31 west of
+7.5W (all of CONUS) are NaN. No other year has any NaN.
+- **Caveat:** 20CR is the ensemble mean, which damps daily extremes.
+- **Validation:** 1950 (with 1949 and 1951) matches a brute-force pandas local-day
+calculation at 40 random CONUS points, and a synthetic test over all 360 longitudes across
+the 1999/2000/2001 boundaries also matches exactly. The script prints a harmless HDF5
+"unable to open file" diagnostic on each write; the files are fine.
+- **Archive handling.** Each raw file is copied to local temp, read, and deleted; the output
+is built locally and copied over, so nothing from the archive stays on disk. Re-running
+skips existing years.
+
+```bash
+python nh_mid_latitude_20cr_localday.py                    # 1900-2015, ~40 min over the share
+python nh_mid_latitude_20cr_localday.py --years 1950 1952  # a range
+python nh_mid_latitude_20cr_localday.py --out DIR --force  # elsewhere / rebuild
+```
 
 ### Data sources
 

@@ -184,7 +184,7 @@ def era5_band():
     missing = []
     for y in range(ERA5_Y0_F4, ERA5_Y1_F4 + 1):
         for mo in JJA:
-            f = ERA5_DIR / f"era5_2t_{y}{mo:02d}_daily.nc"
+            f = era5_file(y, mo)
             if not f.exists():
                 missing.append(f"{y}-{mo:02d}")
                 continue

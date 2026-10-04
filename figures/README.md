@@ -11,6 +11,14 @@ can be produced on its own.
 | `figure3.py` | Figure 3 — Berkeley Earth exceedance maps, 24–50°N | 8 |
 | `figure4.py` | Figure 4 — northern mid-latitude band, JJA | 9 |
 | `figure5.py` | Figure 5 — heat-wave days, CONUS vs. the global strip | 10 |
+| `figure1_20cr_era20c.py` | Figure 1 with 20CR and ERA-20C, plotted from the master table | — |
+| `figure2_20cr_era20c.py` | Figure 2 with 20CR and ERA-20C, one panel per dataset | — |
+| `figure4_20cr_era20c.py` | Figure 4 with 20CR and ERA-20C | — |
+| `figure5_20cr_era20c.py` | Figure 5 with 20CR and ERA-20C in a Reanalyses column | — |
+| `build_master_table.py` | not a figure: computes every annual series the four figures plot and writes `master_annual_table.csv` | — |
+| `master_table_io.py` | not a figure: reads that table and the command line for the plot-only scripts | — |
+| `reanalysis.py` | not a figure: extracts local-time May-Sep 20CR / ERA-20C data from the archive's NH_mid_latitude files | — |
+| `download_era20c_nh_band.py` | not a figure: downloads ERA-20C and writes the local-time NH_mid_latitude files | — |
 | `common.py` | not a figure: paths and the shared machinery | 1–4 |
 | `prepare_data.py` | not a figure: builds the inputs the archive does not carry | — |
 | `build_derived.py` | not a figure: rebuilds the two archive-level derived products, which is what lets the record move past 2024 | — |
@@ -199,7 +207,7 @@ GHCN-Daily, USHCN-Daily and USHCN-BC alone:
 | USHCN monthly offsets | 2026-08 | yes, thinly |
 | nCLIMDIV (`-20260904`) | 2026-08 | yes |
 | CRUTEM5 | 2026-07 | no, one month short |
-| ERA5 | 2025-12 | no — not on the archive; a rebuild needs Copernicus |
+| ERA5 (`ERA5/ERA5_LT`) | 2025-12 | no — not on the archive; a rebuild needs Copernicus |
 | NOAAGlobalTemp gridded | 2025-12 | no — NCEI has published no newer file |
 | Berkeley daily | 2024-08-31 | no |
 
@@ -551,3 +559,67 @@ notebook, and the embedded image is the stale one.
 One bug fix: the `area_mean` assertion in the pipeline `CHECK` called `float()`
 on a size-1 1-D array, which numpy 2 rejects. It now takes the single time step
 explicitly. Same numbers, and nothing that draws a figure was touched.
+
+### ERA5 uses local-time days
+
+Figures 1, 4 and 5 read `ERA5/ERA5_LT/era5_2t_LT_<YYYYMM>_daily.nc` (`common.era5_file`):
+daily max/min/mean 2 m temperature over local midnight-to-midnight days (UTC +
+round(lon/15) h), built by `download_era5_2t_full_LT.py`. The earlier UTC-day files are in
+`ERA5/ERA5_no_local_time`. Switching moved ERA5's CONUS JJA TMAX by +0.02 °C on average
+(Figure 1) and Figure 5's CONUS ERA5 heat-wave days for 2015-24 from 6.7 to 5.7 per year.
+The ERA5 caches carry no data-source tag, so delete `era5_*` caches when the source changes.
+
+### Figures with 20CR and ERA-20C: build the master table, then plot
+
+`figure1_20cr_era20c.py`, `figure2_20cr_era20c.py`, `figure4_20cr_era20c.py` and `figure5_20cr_era20c.py` are Figures 1, 2, 4 and 5
+with two reanalyses added (20CR v3, 1900-2015; ERA-20C, 1900-2010). They are **plot-only**: every number comes from one CSV,
+`PAPER_FIGURES_FINAL/master_annual_table.csv`, that `build_master_table.py` writes. `figure1.py` ... `figure5.py`, their caches and their
+PNGs are untouched; the new figures are written beside them as `Figure<N>_20CR_ERA20C.png`. No GHCN data is in the table or in these scripts.
+
+```bash
+python figures/build_master_table.py                     # every missing column (extracting 20CR / ERA-20C from the archive takes ~25 min)
+python figures/figure4_20cr_era20c.py                    # every dataset of the figure
+python figures/figure4_20cr_era20c.py --datasets berkeley 20cr era20c --out Figure4_three.png
+python figures/build_master_table.py --list              # what the table holds
+```
+
+**The table.** Rows are years (1900-2026), columns `<domain>_<quantity>__<dataset>`, 57 of them; `master_annual_table_columns.csv` describes each
+(units, years, method). `conus_jja_{tmax,tmin,tavg}_anom__<ds>` is Figure 1 (deg C against 1951-1980), `conus_records__<ds>` Figure 2
+(records per year per cell), `band_jja_{tmax,tmin,tavg}_anom__<ds>` Figure 4, `conus_hw_days__<ds>` and `band_hw_days__<ds>` Figure 5,
+with `<ds>` in `era5 berkeley nclimdiv ushcn ushcn_bc noaa crutem5 20cr era20c` (plus `berkeley_at_ushcn` and `ushcn_bc_x_sampling` for the records).
+`conus_jja_tavgmean_anom__` / `band_jja_tavgmean_anom__` are TAVG from the mean of the day's samples (20CR, ERA-20C). The builder's
+computation **is** the figures' own: each section's functions are copied from `figure1.py`, `figure2.py`, `figure4.py` and `figure5.py` (GHCN
+branches removed) and use the same cache names, so cached datasets reproduce the old numbers exactly (checked: all old Figure 1 and 2 columns
+and the Figure 4 and 5 caches match to rounding). It is incremental: columns already in the CSV are kept; `--sections`, `--datasets`, `--rebuild`
+choose what to (re)compute. The plot scripts smooth with `common.lowess_smooth` at plot time; nothing smoothed is stored.
+
+**The plot scripts.** Options: `--datasets` (names as in the table; default = every dataset of the figure), `--csv`, `--out`, `--list`, and
+`--tavg midrange|mean` (Figures 1 and 4: 20CR / ERA-20C TAVG as (TMAX+TMIN)/2, like ERA5 and Berkeley, or the day's mean). Figure 2 draws one
+panel per selected dataset; Figure 5 draws a Berkeley column, a USHCN column and a "Reanalyses" column (ERA5, 20CR, ERA-20C overlaid) for whichever
+datasets are selected. The y-scale of Figures 1 and 5 is set by the non-reanalysis lines and 20CR / ERA-20C can only widen it, so the paper's lines
+look as before. The CHECK, trend and end-revision tables of the old scripts are printed from the CSV.
+
+**Local-time days.** Both reanalyses are archived sub-daily, and a UTC day cuts the afternoon of the western United States in two, so the daily
+maximum, minimum and mean are taken over each grid point's own local midnight-to-midnight day, local time = UTC + round(lon/15) hours (lon wrapped to
+[-180, 180), halves to the even hour): the rule of `ERA5/ERA5_LT`. The finished files are on the archive, one per year, 24-50 N at every longitude:
+`20CR/Daily/NH_mid_latitude/20cr_2m_LT_<y>_daily.nc` (`tmax`, `tmin`, `tavg`; built from `20CR/Daily/raw_full`) and
+`ERA20C/NH_mid_latitude/era20c_2t_LT_<y>_daily.nc` (`t2m_max`, `t2m_min`, `t2m_mean`; built by `download_era20c_nh_band.py` from NCAR GDEX d626000's
+3-hourly surface forecasts, which uses `reanalysis.local_day_stats()`). `reanalysis.py` extracts local May-September from them (copying one file at a
+time, deleting the copy at once) for the builder. Checked: with the offset forced to zero `local_day_stats` reproduces the archive's own UTC-day
+`tmax`/`tmin` exactly, and at the CONUS cells the ERA-20C band files equal the earlier build from the CONUS-only files.
+
+**Copies are deleted.** Once the CSV is written the builder removes everything it copied from the lab archive: the whole `_stage/` folder and the
+20CR / ERA-20C extracts (`--keep-copies` skips this). The derived caches (`_cache_*`) are computed products and stay. A later rebuild re-copies only
+what its missing caches need.
+
+**Things to know before reading the lines.**
+
+1. *20CR is the ensemble mean.* The archive holds only the mean of the 80 members, which smooths day-to-day weather: its daily maxima are lower and its
+   record and heat-wave statistics are those of a smoother series than any single day was. Its JJA means are much less affected than its extremes.
+2. *The records in Figure 2 are over each dataset's own years.* With N years in a record a stationary climate gives every year 153/N records per cell:
+   1.21 at N = 126, 1.32 for 20CR, 1.38 for ERA-20C. The CHECK table prints that baseline, and "recent" for a reanalysis is its own last ten years.
+   The smoothed lines near their last years are extrapolation (see *The last years are still extrapolation* above).
+3. *Land.* Figure 4 carries Berkeley's land mask onto each coarser grid by area (a cell is land when at least half of it is Berkeley land); Figure 2
+   counts a reanalysis cell when at least half of it is inside CONUS, and Figure 5 when its centre is, as ERA5's does.
+4. *ERA-20C record ends.* 1 Jan 1900 (the record starts at 09 UTC) and the last day of 2010 are incomplete in the ERA-20C files and are NaN; neither is in
+   the May-September data the figures use.
